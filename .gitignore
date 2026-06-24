@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Gecici loglar
+*.log
+
+# NOT: data/cache.sqlite BILEREK dahil edilir (bulutta veri hazir gelsin diye).

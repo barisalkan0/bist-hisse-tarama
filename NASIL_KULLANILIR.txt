@@ -1,0 +1,72 @@
+================================================================
+  BIST HISSE TARAMA — KULLANIM KILAVUZU
+================================================================
+
+NE ISE YARAR?
+-------------
+Borsa Istanbul hisselerini belirli olculere gore tarar:
+  • Uzun suredir dusup son gunlerde toparlamaya baslayanlar ("Dipten Donus")
+  • Hacmi artarken fiyati dusenler
+Sonuclari tarih, deger ve grafik olarak gosterir.
+
+
+NASIL ACILIR?
+-------------
+1) "calistir.bat" dosyasina cift tiklayin.
+2) Birkac saniye icinde tarayicida uygulama acilir.
+3) Kapatmak icin acilan siyah pencereyi kapatin.
+
+(Ilk acilista internet gerekir; veriler indirilir.)
+
+
+ILK KURULUM (sadece bir kez)
+----------------------------
+Ilk acilista, sol taraftaki "Ilk veri indirme" dugmesine basin.
+Tum BIST hisselerinin son 2 yillik verisi in%er — birkac dakika surer.
+Sonraki acilislarda bu gerekmez; sadece "Verileri Guncelle" ile
+eksik son gunler hizlica eklenir.
+
+
+SEKMELER
+--------
+🔻➡️🔺 Dipten Donus
+    "Donem"          : Ne kadar suredir dustugune bakilsin? (1-6 ay / 1 yil)
+    "Toparlanma"     : Son 2 / 3 / 5 gunde yukseliyor mu?
+    "Dusus tanimi"   :
+        - Trend bazli : Donemde belirli % dusmus ve hala dusuk seyreden hisseler
+        - Kati        : Donem gunlerinin cogunlugu dusus olan hisseler
+    Esik degerlerini kaydiraclarla ayarlayabilirsiniz.
+
+📊 Hacim / Fiyat
+    Son birkac gunde fiyati duserken islem hacmi ortalamanin
+    belirgin uzerine cikan hisseler.
+
+📋 Tum Hisseler
+    mynet'teki gibi tum hisselerin anlik Son / Fark% / Hacim tablosu.
+    Arama kutusuna sembol yazarak filtreleyebilirsiniz.
+
+🚫 Devre Disi
+    Ilgilenmediginiz hisseleri buraya ekleyin; taramalarda gosterilmez.
+    Tarama sonuclarinin altindaki "Gizle" ile de hizlica ekleyebilirsiniz.
+
+
+GRAFIK
+------
+Her tarama sonucunda "Grafigini gor" kutusundan bir hisse secin;
+o hissenin secili donemdeki fiyat + hacim grafigi cizilir.
+
+
+VERILER NEREDEN GELIYOR?
+------------------------
+  • Hisse listesi ve anlik fiyatlar : mynet (canli borsa)
+  • Gecmis gunluk veriler           : Yahoo Finance (duzeltilmis fiyat)
+Veriler gun sonu (kapanis) bazlidir. Bedelsiz/bolunme etkileri
+otomatik duzeltilir, bu yuzden "dusus" listesi yaniltmaz.
+
+
+NOTLAR
+------
+  • Internet yokken de calisir; en son indirilen veriyle gosterir
+    ("veri bayat" uyarisi cikar).
+  • Veriler "hisse-takip/data/cache.sqlite" dosyasinda saklanir.
+================================================================

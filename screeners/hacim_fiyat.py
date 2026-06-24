@@ -1,0 +1,49 @@
+"""
+Tarama 2 — Hacim Artiyor, Fiyat Dusuyor:
+Son N gunde fiyat duserken islem hacmi 20 gunluk ortalamasinin belirgin uzerinde
+olan hisseler. Hacim Lot (adet) bazinda ve 20 gunluk ortalamaya normalize edilir
+(TL hacmi enflasyonla kayar, yaniltir).
+"""
+import pandas as pd
+
+from screeners import base
+import settings as cfg
+
+
+def run(
+    data,
+    window=cfg.DEFAULT_VOLUME_WINDOW,
+    vol_multiple=cfg.DEFAULT_VOLUME_MULTIPLE,
+    snapshot=None,
+):
+    snapshot = snapshot or {}
+    rows = []
+    for sym, df in data.items():
+        close = df["close"]
+        volume = df["volume"]
+        if len(close) <= max(window, cfg.SMA_SHORT) + 1:
+            continue
+
+        price_ret = base.pct_change_over(close, window)
+        vratio = base.volume_ratio(volume, window)
+        if price_ret is None or vratio is None:
+            continue
+
+        if price_ret < 0 and vratio >= vol_multiple:
+            rows.append(
+                {
+                    "Sembol": sym,
+                    "Son": snapshot.get(sym, round(float(close.iloc[-1]), 2)),
+                    f"{window}G Fiyat %": round(price_ret, 2),
+                    "Hacim/20G Ort": round(vratio, 2),
+                    "Baslangic": base.date_str(df, window),
+                    "Son Tarih": base.date_str(df, 0),
+                }
+            )
+
+    cols = ["Sembol", "Son", f"{window}G Fiyat %", "Hacim/20G Ort",
+            "Baslangic", "Son Tarih"]
+    out = pd.DataFrame(rows, columns=cols)
+    if not out.empty:
+        out = out.sort_values("Hacim/20G Ort", ascending=False).reset_index(drop=True)
+    return out
