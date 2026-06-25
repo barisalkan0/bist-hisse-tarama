@@ -13,7 +13,7 @@ import streamlit as st
 
 import settings as cfg
 from data import cache, universe, fetch, store
-from screeners import base, dip_donus, hacim_fiyat, hafta52
+from screeners import base, dip_donus, hacim_fiyat, hafta52, mevsim
 
 st.set_page_config(page_title="BİST Hisse Tarama", page_icon="📈", layout="wide")
 
@@ -138,6 +138,11 @@ def _data_version():
 @st.cache_data(show_spinner=False)
 def load_data(version):
     return base.load_all(min_days=30, exclude_blacklist=True)
+
+
+@st.cache_data(show_spinner=False)
+def load_all_monthly(version):
+    return cache.get_all_monthly(min_points=24)  # mevsimsellik için aylık geçmiş
 
 
 @st.cache_data(show_spinner=False)
@@ -489,10 +494,10 @@ def _row_detail(sym, key, chart_days):
 # ----------------------------------------------------------------------------
 # Sekmeler
 # ----------------------------------------------------------------------------
-(tab_summary, tab1, tab2, tab_52, tab3,
+(tab_summary, tab1, tab2, tab_52, tab_mevsim, tab3,
  tab_fav, tab_notes, tab4) = st.tabs(
     ["🏠 Özet", "🔻➡️🔺 Dipten Dönüş", "📊 Hacim / Fiyat", "📉 52 Hafta",
-     "📋 Tüm Hisseler", "⭐ Favoriler", "📝 Notlar", "🚫 Devre Dışı"]
+     "📅 Mevsimsellik", "📋 Tüm Hisseler", "⭐ Favoriler", "📝 Notlar", "🚫 Devre Dışı"]
 )
 
 
@@ -622,6 +627,60 @@ with tab_52:
         q52 = st.text_input("Hisse ara", key="q_52").strip().upper()
         r52_show = r52[r52["Sembol"].str.contains(q52)] if q52 else r52
         render_table(r52_show, "t52", chart_days=252)
+
+
+# --- Mevsimsellik ---
+with tab_mevsim:
+    st.subheader("📅 Mevsimsellik — geçmiş aylık davranış")
+    st.caption("⚠️ **Geçmiş veriye dayalı istatistiktir; gelecek garantisi DEĞİLDİR.** "
+               "Az yıllı veriler güvenilmezdir. **Mevsimsel Fark** = ayın ortalamasının, "
+               "hissenin genel aylık ortalamasından sapması (+: tipikten güçlü, −: zayıf) "
+               "— enflasyon eğilimi ayıklanmış asıl sinyaldir.")
+    monthly = load_all_monthly(_data_version())
+    if not monthly:
+        st.info("Aylık veri yok. Kenar çubuğundan 'Verileri Güncelle' deneyin.")
+    else:
+        mode = st.radio("Görünüm", ["Hisse detayı", "Ay taraması"], horizontal=True)
+
+        if mode == "Hisse detayı":
+            sym = st.selectbox("Hisse", sorted(monthly.keys()), key="mevsim_sym")
+            seas = mevsim.stock_seasonality(monthly[sym])
+            if seas.empty:
+                st.warning("Bu hisse için yeterli aylık veri yok.")
+            else:
+                yrs = int(seas["Yıl"].max())
+                if yrs < 5:
+                    st.warning(f"⚠️ Yalnızca ~{yrs} yıllık veri — güvenilmez, dikkatli yorumla.")
+                colors = ["#15803D" if v >= 0 else "#DC2626"
+                          for v in seas["Mevsimsel Fark %"]]
+                fig = go.Figure(go.Bar(x=seas["Ay"], y=seas["Mevsimsel Fark %"],
+                                       marker_color=colors))
+                fig.update_layout(template="plotly_white", height=330,
+                                  margin=dict(l=10, r=10, t=46, b=10),
+                                  title=dict(text=f"<b>{sym}</b> — aylara göre mevsimsel güç (%)",
+                                             font=dict(size=15)),
+                                  yaxis_title="Mevsimsel Fark %")
+                st.plotly_chart(fig, width="stretch")
+                st.dataframe(style_results(seas.drop(columns=["_m"])),
+                             width="stretch", hide_index=True)
+                st.caption(f"{sym} için {yrs} yıllık aylık veriye dayanır.")
+
+        else:  # Ay taraması
+            next_m = (date.today().month % 12) + 1
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                ay = st.selectbox("Ay", list(range(1, 13)), index=next_m - 1,
+                                  format_func=lambda m: mevsim.AY_TAM[m - 1])
+            with c2:
+                yon = st.radio("Yön", ["Güçlü", "Zayıf"], horizontal=True)
+            with c3:
+                miny = st.slider("En az yıl", 5, 15, 7)
+            res = mevsim.month_scan(monthly, ay, min_years=miny, strong=(yon == "Güçlü"))
+            st.markdown(f"**{len(res)} hisse** — **{mevsim.AY_TAM[ay - 1]}** ayında tarihsel "
+                        f"{'güçlü' if yon == 'Güçlü' else 'zayıf'} (≥{miny} yıl veri).")
+            qm = st.text_input("Hisse ara", key="q_mevsim").strip().upper()
+            res_show = res[res["Sembol"].str.contains(qm)] if qm else res
+            render_table(res_show, "tmevsim", chart_days=252)
 
 
 # --- Tab 3: Tüm Hisseler (son kapanış) ---

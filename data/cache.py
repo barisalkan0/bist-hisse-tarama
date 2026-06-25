@@ -122,6 +122,10 @@ def init_db():
         CREATE TABLE IF NOT EXISTS notes (
             symbol TEXT PRIMARY KEY, text TEXT, date TEXT
         );
+        CREATE TABLE IF NOT EXISTS monthly (
+            symbol TEXT, date TEXT, close REAL, adj_close REAL,
+            PRIMARY KEY (symbol, date)
+        );
         CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
         """
     )
@@ -199,6 +203,58 @@ def get_last_date(symbol):
     cur = db.execute("SELECT MAX(date) FROM prices WHERE symbol=?", (symbol,))
     v = cur.fetchone()[0]
     return v  # 'YYYY-MM-DD' veya None
+
+
+# ---------- monthly (mevsimsellik icin uzun aylik gecmis) ----------
+def upsert_monthly(symbol, df):
+    """df: index=tarih(aylik), kolonlar close/adj_close."""
+    if df is None or df.empty:
+        return 0
+    db = connect()
+    rows = []
+    for idx, r in df.iterrows():
+        d = idx.date().isoformat() if hasattr(idx, "date") else str(idx)
+        rows.append((symbol, d, _f(r.get("close")), _f(r.get("adj_close"))))
+    _bulk(
+        db,
+        "INSERT OR REPLACE INTO monthly (symbol,date,close,adj_close) VALUES (?,?,?,?)",
+        rows,
+    )
+    return len(rows)
+
+
+def get_monthly(symbol):
+    db = connect()
+    df = pd.read_sql_query(
+        "SELECT date, close, adj_close FROM monthly WHERE symbol=? ORDER BY date",
+        db, params=(symbol,), parse_dates=["date"],
+    )
+    if not df.empty:
+        df = df.set_index("date")
+    return df
+
+
+def get_all_monthly(min_points=12):
+    """Tum hisselerin aylik verisini {symbol: DataFrame} olarak doner.
+    min_points'ten az kayitli olanlar atlanir."""
+    db = connect()
+    big = pd.read_sql_query(
+        "SELECT symbol, date, close, adj_close FROM monthly ORDER BY symbol, date",
+        db, parse_dates=["date"],
+    )
+    out = {}
+    if big.empty:
+        return out
+    for sym, g in big.groupby("symbol"):
+        if len(g) >= min_points:
+            out[sym] = g.drop(columns="symbol").set_index("date")
+    return out
+
+
+def monthly_symbols():
+    db = connect()
+    cur = db.execute("SELECT DISTINCT symbol FROM monthly ORDER BY symbol")
+    return [r[0] for r in cur.fetchall()]
 
 
 def symbols_in_cache():

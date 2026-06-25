@@ -135,3 +135,46 @@ def update_all(symbols, names=None, progress_cb=None, batch_size=40, pause=0.4):
         time.sleep(pause)  # Yahoo rate-limit'e saygi
 
     return total_rows, errors
+
+
+def update_monthly(symbols, period="15y", progress_cb=None, batch_size=40, pause=0.4):
+    """
+    Mevsimsellik icin uzun AYLIK gecmis ceker (interval=1mo). Kucuk veridir; sik
+    guncelleme gerektirmez. Doner: (eklenen_satir, hata_listesi).
+    """
+    total = len(symbols)
+    done, total_rows = 0, 0
+    errors = []
+    for i in range(0, total, batch_size):
+        chunk = symbols[i : i + batch_size]
+        yahoos = [s + cfg.YAHOO_SUFFIX for s in chunk]
+        try:
+            data = yf.download(
+                yahoos, period=period, interval="1mo", auto_adjust=False,
+                progress=False, group_by="ticker", threads=True,
+            )
+        except Exception as e:
+            errors.append(f"{chunk[0]}..: {e}")
+            data = None
+
+        for s, y in zip(chunk, yahoos):
+            sub = None
+            try:
+                if data is not None and isinstance(data.columns, pd.MultiIndex):
+                    if y in data.columns.get_level_values(0):
+                        sub = data[y]
+                elif data is not None and len(chunk) == 1:
+                    sub = data
+            except Exception:
+                sub = None
+
+            sub = _normalize(sub) if sub is not None else None
+            if sub is not None and not sub.empty:
+                total_rows += cache.upsert_monthly(s, sub)
+            done += 1
+            if progress_cb:
+                progress_cb(done, total, s)
+
+        time.sleep(pause)
+
+    return total_rows, errors
