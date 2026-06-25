@@ -47,6 +47,22 @@ def ping():
         return False
 
 
+def diagnose():
+    """
+    Baglanti durumunu teshis eder. Doner: (anahtar_var, baglanti_ok, hata_metni).
+    Token'i ifsa etmez; hata metni yalnizca URL/durum bilgisi icerir.
+    """
+    if not enabled():
+        return (False, False, "Kimlik bilgisi okunamadı (Secrets adı/formatı?).")
+    try:
+        res = _cmd("PING")
+        if res == "PONG":
+            return (True, True, None)
+        return (True, False, f"Beklenmedik yanıt: {res!r}")
+    except Exception as e:
+        return (True, False, str(e))
+
+
 def _cmd(*args):
     """Tek bir Redis komutunu REST ile calistirir. Hata olursa istisna firlatir."""
     url, token = _creds()

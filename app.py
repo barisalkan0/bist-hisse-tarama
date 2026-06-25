@@ -154,11 +154,11 @@ def maybe_auto_update():
 
 # İlk açılışta: mynet snapshot'ı çek + geçmiş veride eksik günleri otomatik tamamla.
 if "boot" not in st.session_state:
-    # Kalici depo (Upstash) baglantisini bir kez test et ve gizleme listesini esitle
+    # Kalici depo (Upstash) baglantisini bir kez teshis et ve gizleme listesini esitle
     try:
-        st.session_state["store_ok"] = store.ping()
-    except Exception:
-        st.session_state["store_ok"] = False
+        st.session_state["store_diag"] = store.diagnose()
+    except Exception as e:
+        st.session_state["store_diag"] = (False, False, str(e))
     try:
         cache.sync_blacklist_from_remote()
     except Exception:
@@ -254,10 +254,15 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    if st.session_state.get("store_ok"):
+    _en, _ok, _err = st.session_state.get("store_diag", (False, False, None))
+    if _ok:
         st.caption("🟢 Kalıcı gizleme: **bağlı** (Upstash) — liste yeniden başlamada korunur.")
+    elif _en:
+        st.caption("🟠 Kalıcı gizleme: anahtar **var** ama **bağlanılamadı**.")
+        with st.expander("Hata ayrıntısı"):
+            st.code(_err or "bilinmiyor")
     else:
-        st.caption("🟡 Kalıcı gizleme: **yerel** (geçici) — yeniden başlamada sıfırlanır.")
+        st.caption("🟡 Kalıcı gizleme: anahtar **okunamadı** (Secrets adı/formatı?).")
     st.caption(
         "Gün sonu (EOD) veriye dayanır.\n\n"
         "**Kaynak:** mynet (liste + anlık), Yahoo Finance (geçmiş, düzeltilmiş fiyat)."
