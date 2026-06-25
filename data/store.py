@@ -19,17 +19,41 @@ import requests
 _BLACKLIST_KEY = "blacklist"
 
 
-def _creds():
-    url = os.environ.get("UPSTASH_REDIS_REST_URL")
-    token = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
-    if not url or not token:
+def _from_secrets(key):
+    """st.secrets'tan bir anahtari guvenli okur (farkli surumlerde calisir)."""
+    try:
+        import streamlit as st
         try:
-            import streamlit as st
-            url = url or st.secrets.get("UPSTASH_REDIS_REST_URL")
-            token = token or st.secrets.get("UPSTASH_REDIS_REST_TOKEN")
+            if key in st.secrets:
+                return st.secrets[key]
         except Exception:
-            pass
+            return st.secrets.get(key)  # bazi surumler icin
+    except Exception:
+        pass
+    return None
+
+
+def _creds():
+    url = os.environ.get("UPSTASH_REDIS_REST_URL") or _from_secrets("UPSTASH_REDIS_REST_URL")
+    token = os.environ.get("UPSTASH_REDIS_REST_TOKEN") or _from_secrets("UPSTASH_REDIS_REST_TOKEN")
     return url, token
+
+
+def secret_keys():
+    """
+    Teshis: uygulamanin gordugu secret ANAHTAR ADLARINI doner (DEGERLERI DEGIL).
+    Yanlis isim / bos / bolum (section) altinda gomulu mu anlamak icin.
+    """
+    names = [f"env:{k}" for k in os.environ if "UPSTASH" in k.upper()]
+    try:
+        import streamlit as st
+        try:
+            names += [str(k) for k in st.secrets.keys()]
+        except Exception as e:
+            names.append(f"(secrets okunamadı: {type(e).__name__})")
+    except Exception:
+        names.append("(streamlit yok)")
+    return names
 
 
 def enabled():

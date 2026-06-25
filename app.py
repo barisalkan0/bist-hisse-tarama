@@ -263,6 +263,11 @@ with st.sidebar:
             st.code(_err or "bilinmiyor")
     else:
         st.caption("🟡 Kalıcı gizleme: anahtar **okunamadı** (Secrets adı/formatı?).")
+        with st.expander("Teşhis: uygulamanın gördüğü anahtar adları"):
+            st.write("Değerler değil, yalnızca **isimler** (gizli değil):")
+            st.code("\n".join(store.secret_keys()) or "(hiç anahtar yok)")
+            st.caption("Burada `UPSTASH_REDIS_REST_URL` ve `UPSTASH_REDIS_REST_TOKEN` "
+                       "isimlerini birebir görmüyorsan, Secrets'taki isim/format hatalıdır.")
     st.caption(
         "Gün sonu (EOD) veriye dayanır.\n\n"
         "**Kaynak:** mynet (liste + anlık), Yahoo Finance (geçmiş, düzeltilmiş fiyat)."
