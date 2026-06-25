@@ -84,13 +84,22 @@ def connect():
     if _DB is None:
         work = _work_path()
         _ensure_seeded(work)
-        _DB = sqlite3.connect(work, check_same_thread=False)
+        # isolation_level=None -> OTOMATIK COMMIT modu. Paylasilan baglantida (Streamlit
+        # is parcaciklari) transaction durumu senkrondan cikip "cannot commit - no
+        # transaction is active" hatasini onler. commit() cagrilari zararsiz no-op olur.
+        _DB = sqlite3.connect(work, check_same_thread=False, isolation_level=None)
         _DB.row_factory = sqlite3.Row
     return _DB
 
 
+_init_done = False
+
+
 def init_db():
+    global _init_done
     db = connect()
+    if _init_done:   # sema/temizlik surecte yalnizca bir kez calissin
+        return
     db.executescript(
         """
         CREATE TABLE IF NOT EXISTS prices (
@@ -127,6 +136,23 @@ def init_db():
     if pv:
         db.execute("DELETE FROM prices WHERE date = ?", (pv,))
     db.commit()
+    _init_done = True
+
+
+def _bulk(db, sql, rows):
+    """Otomatik-commit modunda toplu yazimi TEK transaction'da yapar (hizli olsun)."""
+    if not rows:
+        return
+    db.execute("BEGIN")
+    try:
+        db.executemany(sql, rows)
+        db.execute("COMMIT")
+    except Exception:
+        try:
+            db.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
 
 
 # ---------- prices ----------
@@ -145,13 +171,13 @@ def upsert_prices(symbol, df):
                 _f(r.get("close")), _f(r.get("adj_close")), _i(r.get("volume")),
             )
         )
-    db.executemany(
+    _bulk(
+        db,
         "INSERT OR REPLACE INTO prices "
         "(symbol,date,open,high,low,close,adj_close,volume) "
         "VALUES (?,?,?,?,?,?,?,?)",
         rows,
     )
-    db.commit()
     return len(rows)
 
 
@@ -221,12 +247,12 @@ def save_snapshot(rows):
          r["hacim_tl"], r["saat"], now)
         for r in rows
     ]
-    db.executemany(
+    _bulk(
+        db,
         "INSERT OR REPLACE INTO snapshot "
         "(symbol,name,son,fark,hacim_lot,hacim_tl,saat,captured) VALUES (?,?,?,?,?,?,?,?)",
         data,
     )
-    db.commit()
 
 
 def get_snapshot():
