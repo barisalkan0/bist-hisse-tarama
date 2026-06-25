@@ -15,8 +15,10 @@ def run(
     window=cfg.DEFAULT_VOLUME_WINDOW,
     vol_multiple=cfg.DEFAULT_VOLUME_MULTIPLE,
     snapshot=None,
+    fark=None,
 ):
     snapshot = snapshot or {}
+    fark = fark or {}
     rows = []
     for sym, df in data.items():
         close = df["adj_close"]   # fiyat dususu duzeltilmis fiyattan (bedelsiz yanilmaz)
@@ -33,6 +35,7 @@ def run(
                 {
                     "Sembol": sym,
                     "Son": snapshot.get(sym, round(float(close.iloc[-1]), 2)),
+                    "Fark %": fark.get(sym),
                     f"{window}G Fiyat %": round(price_ret, 2),
                     "Hacim/20G Ort": round(vratio, 2),
                     "Başlangıç": base.date_str(df, window),
@@ -40,7 +43,7 @@ def run(
                 }
             )
 
-    cols = ["Sembol", "Son", f"{window}G Fiyat %", "Hacim/20G Ort",
+    cols = ["Sembol", "Son", "Fark %", f"{window}G Fiyat %", "Hacim/20G Ort",
             "Başlangıç", "Son Tarih"]
     out = pd.DataFrame(rows, columns=cols)
     if not out.empty:

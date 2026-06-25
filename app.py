@@ -88,10 +88,14 @@ def load_data(version):
 @st.cache_data(show_spinner=False)
 def load_snapshot(version):
     snap = cache.get_snapshot()
-    son_map = {}
+    son_map, fark_map = {}, {}
     if not snap.empty:
-        son_map = {r["symbol"]: r["son"] for _, r in snap.iterrows() if pd.notna(r["son"])}
-    return snap, son_map
+        for _, r in snap.iterrows():
+            if pd.notna(r["son"]):
+                son_map[r["symbol"]] = r["son"]
+            if pd.notna(r["fark"]):
+                fark_map[r["symbol"]] = r["fark"]
+    return snap, son_map, fark_map
 
 
 def bump_version():
@@ -173,7 +177,7 @@ if "boot" not in st.session_state:
     bump_version()
 
 
-snap_df, son_map = load_snapshot(_data_version())
+snap_df, son_map, fark_map = load_snapshot(_data_version())
 cached_syms = cache.symbols_in_cache()
 
 
@@ -206,6 +210,20 @@ def style_results(df):
     if pct_cols:
         sty = sty.map(_pct_color, subset=pct_cols)
     return sty.format(fmt, na_rep="—")
+
+
+def render_table(df, key, fixed=("Sembol",)):
+    """Sütun seç/gizle kontrolü olan biçimli sonuç tablosu.
+    İstenmeyen sütunlar üstteki kutudan kapatılıp tekrar açılabilir."""
+    if df.empty:
+        st.dataframe(df, width="stretch", hide_index=True)
+        return
+    optional = [c for c in df.columns if c not in fixed]
+    chosen = st.multiselect("Görünecek sütunlar", optional, default=optional,
+                            key=f"cols_{key}",
+                            help="Sütunları kapatıp tekrar açabilirsiniz.")
+    cols = [c for c in df.columns if c in fixed or c in chosen]
+    st.dataframe(style_results(df[cols]), width="stretch", hide_index=True)
 
 
 # ----------------------------------------------------------------------------
@@ -374,11 +392,12 @@ with tab1:
     else:
         res = dip_donus.run(
             data, period_days, recov_days, method=method,
-            decline_pct=decline, down_ratio=down_ratio, snapshot=son_map,
+            decline_pct=decline, down_ratio=down_ratio,
+            snapshot=son_map, fark=fark_map,
         )
         st.markdown(f"**{len(res)} hisse** bulundu — {period_lbl} düşüş + "
                     f"{recov_lbl.lower()} toparlanma.")
-        st.dataframe(style_results(res), width="stretch", hide_index=True)
+        render_table(res, "t1")
         if not res.empty:
             chart_picker(res, period_days, "t1")
             hide_control(res, "t1")
@@ -400,10 +419,11 @@ with tab2:
     if not data:
         st.info("Önce kenar çubuğundan veriyi indirin.")
     else:
-        res2 = hacim_fiyat.run(data, window=win, vol_multiple=mult, snapshot=son_map)
+        res2 = hacim_fiyat.run(data, window=win, vol_multiple=mult,
+                               snapshot=son_map, fark=fark_map)
         st.markdown(f"**{len(res2)} hisse** bulundu — son {win} gün fiyat düşüşü + "
                     "yüksek hacim.")
-        st.dataframe(style_results(res2), width="stretch", hide_index=True)
+        render_table(res2, "t2")
         if not res2.empty:
             chart_picker(res2, 90, "t2")
             hide_control(res2, "t2")
@@ -419,12 +439,20 @@ with tab3:
                         "hacim_tl", "saat"]].copy()
         show.columns = ["Sembol", "Ad", "Son", "Fark %", "Hacim (Lot)",
                         "Hacim (TL)", "Saat"]
-        q = st.text_input("Hisse ara", "").strip().upper()
+        c_search, c_cols = st.columns([1, 2])
+        with c_search:
+            q = st.text_input("Hisse ara", "").strip().upper()
+        with c_cols:
+            optional = [c for c in show.columns if c != "Sembol"]
+            chosen = st.multiselect("Görünecek sütunlar", optional, default=optional,
+                                    key="cols_t3",
+                                    help="Sütunları kapatıp tekrar açabilirsiniz.")
         if q:
             show = show[show["Sembol"].str.contains(q)
                         | show["Ad"].str.upper().str.contains(q)]
+        cols = [c for c in show.columns if c == "Sembol" or c in chosen]
         st.dataframe(
-            show, width="stretch", hide_index=True, height=520,
+            show[cols], width="stretch", hide_index=True, height=520,
             column_config={
                 "Son": st.column_config.NumberColumn(format="%.2f"),
                 "Fark %": st.column_config.NumberColumn(format="%.2f"),

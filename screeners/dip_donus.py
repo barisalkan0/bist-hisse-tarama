@@ -22,6 +22,7 @@ def run(
     decline_pct=cfg.DEFAULT_DECLINE_PCT,
     down_ratio=cfg.DEFAULT_DOWN_DAY_RATIO,
     snapshot=None,
+    fark=None,
 ):
     """
     data: {symbol: DataFrame}
@@ -29,6 +30,7 @@ def run(
     Doner: pandas DataFrame (bos olabilir), getiriye gore sirali.
     """
     snapshot = snapshot or {}
+    fark = fark or {}
     rows = []
     for sym, df in data.items():
         close = df["adj_close"]   # trend/getiri duzeltilmis fiyattan
@@ -65,6 +67,7 @@ def run(
             {
                 "Sembol": sym,
                 "Son": snapshot.get(sym, round(float(close.iloc[-1]), 2)),
+                "Fark %": fark.get(sym),
                 "Dönem Getirisi %": round(period_ret, 2),
                 "Toparlanma %": round(recov_ret, 2),
                 "Dönem Başı": base.date_str(df, period_days),
@@ -73,7 +76,7 @@ def run(
             }
         )
 
-    cols = ["Sembol", "Son", "Dönem Getirisi %", "Toparlanma %",
+    cols = ["Sembol", "Son", "Fark %", "Dönem Getirisi %", "Toparlanma %",
             "Dönem Başı", "Toparlanma Başı", "Dönem Sonu"]
     out = pd.DataFrame(rows, columns=cols)
     if not out.empty:
