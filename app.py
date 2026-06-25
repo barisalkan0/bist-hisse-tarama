@@ -302,15 +302,39 @@ def column_popover(columns, key, fixed=("Sembol",)):
     return [c for c in columns if c in fixed or c in chosen]
 
 
-def render_table(df, key, fixed=("Sembol",)):
-    """Sütun seç/gizle (popover) kontrollü, biçimli, favori-vurgulu sonuç tablosu."""
+def render_table(df, key, fixed=("Sembol",), chart_days=126, height=None):
+    """Şık (renkli + favori sarımsı vurgulu) tablo. Favoriler en üstte sıralanır;
+    bir satıra tıklayınca altında favori/not/gizle/grafik açılır. Tablonun üstündeki
+    🔍 ile harf harf canlı arama yapılabilir."""
     if df.empty:
         st.dataframe(df, width="stretch", hide_index=True)
         return
-    cols = column_popover(list(df.columns), key, fixed)
+    # Aksiyon sonrası tablo anahtarini degistirerek seçimi sıfırlarız (nonce).
+    # Boylece yeniden siralamada eski konumda yanlis hisse secili kalmaz.
+    nonce = st.session_state.get(f"nonce_{key}", 0)
+    skey = f"tbl_{key}_{nonce}"
+
     favs = set(cache.get_favorites())
-    st.dataframe(style_results(df[cols], favorites=favs),
-                 width="stretch", hide_index=True)
+    df = df.reset_index(drop=True)
+    if "Sembol" in df.columns and favs:
+        df = (df.assign(_f=df["Sembol"].isin(favs))
+                .sort_values("_f", ascending=False, kind="stable")
+                .drop(columns="_f").reset_index(drop=True))
+
+    cols = column_popover(list(df.columns), key, fixed)
+    st.caption("👆 Bir satıra tıkla → ⭐ favori / 📝 not / grafik.   "
+               "🔍 (tablonun üstü) ile harf harf canlı ara.")
+    df_kwargs = dict(width="stretch", hide_index=True, on_select="rerun",
+                     selection_mode="single-row", key=skey)
+    if height is not None:
+        df_kwargs["height"] = height
+    event = st.dataframe(style_results(df[cols], favorites=favs), **df_kwargs)
+    try:
+        sel = list(event.selection.rows)
+    except Exception:
+        sel = []
+    if sel:
+        _row_detail(str(df.iloc[sel[0]]["Sembol"]), key, chart_days)
 
 
 # ----------------------------------------------------------------------------
@@ -420,36 +444,46 @@ def price_volume_chart(symbol, days):
     st.plotly_chart(fig, width="stretch")
 
 
-def row_actions(result_df, key):
-    """Sonuç tablosundan favori aç/kapa + gizleme (kara liste)."""
-    if result_df.empty:
-        return
-    syms = list(result_df["Sembol"])
+def _clear_selection(key):
+    """Aksiyon sonrası tablo seçimini sıfırla (nonce'u artırarak yeni widget)."""
+    st.session_state[f"nonce_{key}"] = st.session_state.get(f"nonce_{key}", 0) + 1
+
+
+def _row_detail(sym, key, chart_days):
+    """Seçili hisse paneli: favori aç/kapa, gizle, not (tarihli), grafik."""
     favs = set(cache.get_favorites())
-    c1, c2 = st.columns(2)
-    with c1:
-        pick = st.selectbox("⭐ Favori aç/kapa", ["—"] + syms, key=f"fav_{key}")
-        if pick != "—":
-            lbl = "★ Favoriden çıkar" if pick in favs else "☆ Favorile"
-            if st.button(lbl, key=f"favbtn_{key}"):
-                cache.remove_favorite(pick) if pick in favs else cache.add_favorite(pick)
-                bump_version()
-                st.rerun()
-    with c2:
-        pick2 = st.selectbox("🚫 Gizle (kara liste)", ["—"] + syms, key=f"hide_{key}")
-        if pick2 != "—" and st.button("Gizle", key=f"hidebtn_{key}"):
-            cache.add_blacklist(pick2)
-            bump_version()
-            st.rerun()
+    notes = cache.get_notes()
+    is_fav = sym in favs
+    st.markdown(f"### {'⭐ ' if is_fav else ''}{sym}")
+    b1, b2 = st.columns(2)
+    if b1.button("★ Favoriden çıkar" if is_fav else "☆ Favorile",
+                 key=f"favbtn_{key}", width="stretch"):
+        cache.remove_favorite(sym) if is_fav else cache.add_favorite(sym)
+        _clear_selection(key)
+        bump_version()
+        st.rerun()
+    if b2.button("🚫 Gizle (kara liste)", key=f"hidebtn_{key}", width="stretch"):
+        cache.add_blacklist(sym)
+        _clear_selection(key)
+        bump_version()
+        st.rerun()
 
+    cur = notes.get(sym, {})
+    txt = st.text_area("📝 Not", value=cur.get("text", ""),
+                       key=f"note_{key}_{sym}", height=80,
+                       placeholder="Bu hisse için notun...")
+    if st.button("💾 Notu kaydet", key=f"notesave_{key}"):
+        if txt.strip():
+            cache.set_note(sym, txt.strip())
+        else:
+            cache.delete_note(sym)
+        _clear_selection(key)
+        bump_version()
+        st.rerun()
+    if cur.get("date"):
+        st.caption(f"📝 Not tarihi: {cur['date']}")
 
-def chart_picker(result_df, days, key):
-    if result_df.empty:
-        return
-    syms = list(result_df["Sembol"])
-    pick = st.selectbox("Grafiğini gör", syms, key=f"chart_{key}")
-    if pick:
-        price_volume_chart(pick, days)
+    price_volume_chart(sym, chart_days)
 
 
 # ----------------------------------------------------------------------------
@@ -539,10 +573,7 @@ with tab1:
                     f"{recov_lbl.lower()} toparlanma.")
         q1 = st.text_input("Hisse ara", key="q_t1").strip().upper()
         res_show = res[res["Sembol"].str.contains(q1)] if q1 else res
-        render_table(res_show, "t1")
-        if not res_show.empty:
-            chart_picker(res_show, period_days, "t1")
-            row_actions(res_show, "t1")
+        render_table(res_show, "t1", chart_days=period_days)
 
 
 # --- Tab 2: Hacim / Fiyat ---
@@ -567,10 +598,7 @@ with tab2:
                     "yüksek hacim.")
         q2 = st.text_input("Hisse ara", key="q_t2").strip().upper()
         res2_show = res2[res2["Sembol"].str.contains(q2)] if q2 else res2
-        render_table(res2_show, "t2")
-        if not res2_show.empty:
-            chart_picker(res2_show, 90, "t2")
-            row_actions(res2_show, "t2")
+        render_table(res2_show, "t2", chart_days=90)
 
 
 # --- 52 Hafta dip/zirve ---
@@ -593,10 +621,7 @@ with tab_52:
         st.markdown(f"**{len(r52)} hisse** — {nere} %{thr} ve daha yakın.")
         q52 = st.text_input("Hisse ara", key="q_52").strip().upper()
         r52_show = r52[r52["Sembol"].str.contains(q52)] if q52 else r52
-        render_table(r52_show, "t52")
-        if not r52_show.empty:
-            chart_picker(r52_show, 252, "t52")
-            row_actions(r52_show, "t52")
+        render_table(r52_show, "t52", chart_days=252)
 
 
 # --- Tab 3: Tüm Hisseler (son kapanış) ---
@@ -610,15 +635,11 @@ with tab3:
         show.columns = ["Sembol", "Ad", "Son", "Fark %", "Hacim (Lot)",
                         "Hacim (TL)", "Tarih"]
         q = st.text_input("Hisse ara", "", key="q_t3").strip().upper()
-        cols = column_popover(list(show.columns), "t3", fixed=("Sembol",))
         if q:
             show = show[show["Sembol"].str.contains(q)
                         | show["Ad"].str.upper().str.contains(q)]
-        favs = set(cache.get_favorites())
-        st.dataframe(style_results(show[cols], favorites=favs), width="stretch",
-                     hide_index=True, height=520)
         st.caption(f"Toplam {len(show)} hisse — son kesin kapanış.")
-        row_actions(show, "t3")
+        render_table(show, "t3", chart_days=126, height=520)
 
 
 # --- Favoriler ---
@@ -626,27 +647,16 @@ with tab_fav:
     st.subheader("⭐ Favori hisseler")
     favs = cache.get_favorites()
     if not favs:
-        st.info("Henüz favori yok. Tablolardaki **⭐ Favori aç/kapa** ile ekleyebilirsin.")
+        st.info("Henüz favori yok. Tablolarda bir satıra tıklayıp **☆ Favorile** "
+                "ile ekleyebilirsin.")
+    elif close_df.empty:
+        st.info("Veri yok. Kenar çubuğundan güncelleyin.")
     else:
-        notes = cache.get_notes()
         fav_show = close_df[close_df["symbol"].isin(favs)][
             ["symbol", "ad", "son", "fark", "hacim_lot", "hacim_tl", "tarih"]].copy()
         fav_show.columns = ["Sembol", "Ad", "Son", "Fark %", "Hacim (Lot)",
                             "Hacim (TL)", "Tarih"]
-        st.dataframe(style_results(fav_show, favorites=set(favs)),
-                     width="stretch", hide_index=True)
-
-        st.divider()
-        pick = st.selectbox("Favori detayı / grafik", favs, key="fav_detail")
-        if pick:
-            if st.button("★ Favoriden çıkar", key="fav_remove_detail"):
-                cache.remove_favorite(pick)
-                bump_version()
-                st.rerun()
-            nt = notes.get(pick)
-            if nt and nt.get("text"):
-                st.markdown(note_card_html(pick, nt), unsafe_allow_html=True)
-            price_volume_chart(pick, 126)
+        render_table(fav_show, "tfav", chart_days=126)
 
 
 # --- Notlar ---
