@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 import streamlit as st
 
 import settings as cfg
-from data import cache, universe, fetch
+from data import cache, universe, fetch, store
 from screeners import base, dip_donus, hacim_fiyat
 
 st.set_page_config(page_title="BİST Hisse Tarama", page_icon="📈", layout="wide")
@@ -154,7 +154,11 @@ def maybe_auto_update():
 
 # İlk açılışta: mynet snapshot'ı çek + geçmiş veride eksik günleri otomatik tamamla.
 if "boot" not in st.session_state:
-    # Gizleme listesini kalici depodan (Upstash) esitle - yeniden baslamada kaybolmasin
+    # Kalici depo (Upstash) baglantisini bir kez test et ve gizleme listesini esitle
+    try:
+        st.session_state["store_ok"] = store.ping()
+    except Exception:
+        st.session_state["store_ok"] = False
     try:
         cache.sync_blacklist_from_remote()
     except Exception:
@@ -250,6 +254,10 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
+    if st.session_state.get("store_ok"):
+        st.caption("🟢 Kalıcı gizleme: **bağlı** (Upstash) — liste yeniden başlamada korunur.")
+    else:
+        st.caption("🟡 Kalıcı gizleme: **yerel** (geçici) — yeniden başlamada sıfırlanır.")
     st.caption(
         "Gün sonu (EOD) veriye dayanır.\n\n"
         "**Kaynak:** mynet (liste + anlık), Yahoo Finance (geçmiş, düzeltilmiş fiyat)."

@@ -37,6 +37,16 @@ def enabled():
     return bool(url and token)
 
 
+def ping():
+    """Upstash'e gercekten ulasilabiliyor mu? (kimlik dogru + erisilebilir)."""
+    if not enabled():
+        return False
+    try:
+        return _cmd("PING") == "PONG"
+    except Exception:
+        return False
+
+
 def _cmd(*args):
     """Tek bir Redis komutunu REST ile calistirir. Hata olursa istisna firlatir."""
     url, token = _creds()
