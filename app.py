@@ -74,6 +74,36 @@ st.markdown(
 
 
 # ----------------------------------------------------------------------------
+# Türkçe biçimlendirme yardımcıları
+# ----------------------------------------------------------------------------
+TR_AY = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"]
+TR_AY_TAM = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz",
+             "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
+
+
+def tr_num(x, dec=2):
+    """Türkçe sayı biçimi: binlik '.', ondalık ',' -> 96.110.687,00"""
+    if x is None or pd.isna(x):
+        return "—"
+    s = f"{x:,.{dec}f}"
+    return s.translate(str.maketrans({",": ".", ".": ","}))
+
+
+def tr_pct(x):
+    if x is None or pd.isna(x):
+        return "—"
+    return f"{x:+.2f}".replace(".", ",")
+
+
+def tr_date(iso):
+    try:
+        d = date.fromisoformat(str(iso)[:10])
+        return f"{d.day} {TR_AY_TAM[d.month - 1]} {d.year}"
+    except Exception:
+        return str(iso)
+
+
+# ----------------------------------------------------------------------------
 # Yardımcı: veri yükleme (önbellekli, sürüm anahtarıyla taze tutulur)
 # ----------------------------------------------------------------------------
 def _data_version():
@@ -183,6 +213,13 @@ if "boot" not in st.session_state:
 close_df, son_map, fark_map = load_closing(_data_version())
 cached_syms = cache.symbols_in_cache()
 
+# En guncel kapanis tarihi (hem ust baslikta hem kenar cubugunda kullanilir)
+gmax = None
+if cached_syms:
+    gmax = cache.connect().execute("SELECT MAX(date) FROM prices").fetchone()[0]
+if gmax:
+    st.caption(f"📅 **Son güncel kapanış:** {tr_date(gmax)}")
+
 
 # ----------------------------------------------------------------------------
 # Tablo biçimlendirme (renkli yüzdeler, ondalık formatı)
@@ -197,18 +234,18 @@ def _pct_color(v):
 
 
 def style_results(df):
-    """Tarama sonuç tablosu için Styler: % sütunları renkli, sayılar biçimli."""
+    """Tarama sonuç tablosu için Styler: % sütunları renkli, sayılar Türkçe biçimli."""
     if df.empty:
         return df
     pct_cols = [c for c in df.columns if "%" in c]
     fmt = {}
     for c in df.columns:
         if c in pct_cols:
-            fmt[c] = "{:+.2f}"
-        elif c == "Son":
-            fmt[c] = "{:.2f}"
+            fmt[c] = tr_pct
+        elif c in ("Son", "Hacim (Lot)", "Hacim (TL)"):
+            fmt[c] = lambda v: tr_num(v, 2)
         elif c == "Hacim/20G Ort":
-            fmt[c] = "{:.2f}×"
+            fmt[c] = lambda v: (tr_num(v, 2) + "×") if pd.notna(v) else "—"
     sty = df.style
     if pct_cols:
         sty = sty.map(_pct_color, subset=pct_cols)
@@ -241,10 +278,6 @@ def render_table(df, key, fixed=("Sembol",)):
 # ----------------------------------------------------------------------------
 with st.sidebar:
     st.header("BİST Hisse Tarama")
-
-    gmax = None
-    if cached_syms:
-        gmax = cache.connect().execute("SELECT MAX(date) FROM prices").fetchone()[0]
 
     m1, m2 = st.columns(2)
     m1.metric("Son kapanış", gmax or "—")
@@ -324,15 +357,26 @@ def price_volume_chart(symbol, days):
     )
     fig.update_layout(
         template="plotly_white",
-        height=400, margin=dict(l=10, r=10, t=46, b=10),
-        title=dict(text=f"<b>{symbol}</b> — son {days} işlem günü", font=dict(size=16)),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        height=430, margin=dict(l=10, r=10, t=56, b=80),
+        title=dict(text=f"<b>{symbol}</b> — son {days} işlem günü",
+                   font=dict(size=16), y=0.97, yanchor="top"),
+        # Efsane (legend) ALTTA - baslikla cakismasin
+        legend=dict(orientation="h", yanchor="top", y=-0.22, x=0.5, xanchor="center"),
         hovermode="x unified",
     )
     fig.update_yaxes(title_text="Fiyat (TL)", secondary_y=False, showgrid=True,
                      gridcolor="rgba(0,0,0,0.05)")
     fig.update_yaxes(title_text="Hacim", secondary_y=True, showgrid=False)
-    fig.update_xaxes(showgrid=False)
+
+    # Turkce aylik eksen etiketleri (Jan -> Oca ...)
+    tickvals, ticktext, seen = [], [], set()
+    for ts in sub.index:
+        key = (ts.year, ts.month)
+        if key not in seen:
+            seen.add(key)
+            tickvals.append(ts)
+            ticktext.append(f"{TR_AY[ts.month - 1]} {ts.year}")
+    fig.update_xaxes(showgrid=False, tickmode="array", tickvals=tickvals, ticktext=ticktext)
     st.plotly_chart(fig, width="stretch")
 
 
@@ -403,10 +447,12 @@ with tab1:
         )
         st.markdown(f"**{len(res)} hisse** bulundu — {period_lbl} düşüş + "
                     f"{recov_lbl.lower()} toparlanma.")
-        render_table(res, "t1")
-        if not res.empty:
-            chart_picker(res, period_days, "t1")
-            hide_control(res, "t1")
+        q1 = st.text_input("Hisse ara", key="q_t1").strip().upper()
+        res_show = res[res["Sembol"].str.contains(q1)] if q1 else res
+        render_table(res_show, "t1")
+        if not res_show.empty:
+            chart_picker(res_show, period_days, "t1")
+            hide_control(res_show, "t1")
 
 
 # --- Tab 2: Hacim / Fiyat ---
@@ -429,13 +475,15 @@ with tab2:
                                snapshot=son_map, fark=fark_map)
         st.markdown(f"**{len(res2)} hisse** bulundu — son {win} gün fiyat düşüşü + "
                     "yüksek hacim.")
-        render_table(res2, "t2")
-        if not res2.empty:
-            chart_picker(res2, 90, "t2")
-            hide_control(res2, "t2")
+        q2 = st.text_input("Hisse ara", key="q_t2").strip().upper()
+        res2_show = res2[res2["Sembol"].str.contains(q2)] if q2 else res2
+        render_table(res2_show, "t2")
+        if not res2_show.empty:
+            chart_picker(res2_show, 90, "t2")
+            hide_control(res2_show, "t2")
 
 
-# --- Tab 3: Tüm Hisseler (mynet anlık) ---
+# --- Tab 3: Tüm Hisseler (son kapanış) ---
 with tab3:
     st.subheader("Tüm hisseler — son kapanış")
     if close_df.empty:
@@ -445,20 +493,13 @@ with tab3:
                          "hacim_tl", "tarih"]].copy()
         show.columns = ["Sembol", "Ad", "Son", "Fark %", "Hacim (Lot)",
                         "Hacim (TL)", "Tarih"]
-        q = st.text_input("Hisse ara", "").strip().upper()
+        q = st.text_input("Hisse ara", "", key="q_t3").strip().upper()
         cols = column_popover(list(show.columns), "t3", fixed=("Sembol",))
         if q:
             show = show[show["Sembol"].str.contains(q)
                         | show["Ad"].str.upper().str.contains(q)]
-        st.dataframe(
-            show[cols], width="stretch", hide_index=True, height=520,
-            column_config={
-                "Son": st.column_config.NumberColumn(format="%.2f"),
-                "Fark %": st.column_config.NumberColumn(format="%.2f"),
-                "Hacim (Lot)": st.column_config.NumberColumn(format="%d"),
-                "Hacim (TL)": st.column_config.NumberColumn(format="%.0f"),
-            },
-        )
+        st.dataframe(style_results(show[cols]), width="stretch",
+                     hide_index=True, height=520)
         st.caption(f"Toplam {len(show)} hisse — son kesin kapanış.")
 
 
