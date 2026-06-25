@@ -31,7 +31,7 @@ def run(
     snapshot = snapshot or {}
     rows = []
     for sym, df in data.items():
-        close = df["close"]
+        close = df["adj_close"]   # trend/getiri duzeltilmis fiyattan
         if len(close) <= period_days:
             continue
 
@@ -65,18 +65,18 @@ def run(
             {
                 "Sembol": sym,
                 "Son": snapshot.get(sym, round(float(close.iloc[-1]), 2)),
-                "Donem Getirisi %": round(period_ret, 2),
+                "Dönem Getirisi %": round(period_ret, 2),
                 "Toparlanma %": round(recov_ret, 2),
-                "Donem Basi": base.date_str(df, period_days),
-                "Donem Sonu": base.date_str(df, 0),
-                "Toparlanma Basi": base.date_str(df, recovery_days),
+                "Dönem Başı": base.date_str(df, period_days),
+                "Toparlanma Başı": base.date_str(df, recovery_days),
+                "Dönem Sonu": base.date_str(df, 0),
             }
         )
 
-    cols = ["Sembol", "Son", "Donem Getirisi %", "Toparlanma %",
-            "Donem Basi", "Toparlanma Basi", "Donem Sonu"]
+    cols = ["Sembol", "Son", "Dönem Getirisi %", "Toparlanma %",
+            "Dönem Başı", "Toparlanma Başı", "Dönem Sonu"]
     out = pd.DataFrame(rows, columns=cols)
     if not out.empty:
         # En cok dusup en cok toparlanan ustte
-        out = out.sort_values("Donem Getirisi %").reset_index(drop=True)
+        out = out.sort_values("Dönem Getirisi %").reset_index(drop=True)
     return out

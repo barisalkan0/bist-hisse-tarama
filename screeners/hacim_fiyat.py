@@ -19,13 +19,12 @@ def run(
     snapshot = snapshot or {}
     rows = []
     for sym, df in data.items():
-        close = df["close"]
-        volume = df["volume"]
+        close = df["adj_close"]   # fiyat dususu duzeltilmis fiyattan (bedelsiz yanilmaz)
         if len(close) <= max(window, cfg.SMA_SHORT) + 1:
             continue
 
         price_ret = base.pct_change_over(close, window)
-        vratio = base.volume_ratio(volume, window)
+        vratio = base.turnover_ratio(df, window)   # ciro bazli, bedelsize dayanikli
         if price_ret is None or vratio is None:
             continue
 
@@ -36,13 +35,13 @@ def run(
                     "Son": snapshot.get(sym, round(float(close.iloc[-1]), 2)),
                     f"{window}G Fiyat %": round(price_ret, 2),
                     "Hacim/20G Ort": round(vratio, 2),
-                    "Baslangic": base.date_str(df, window),
+                    "Başlangıç": base.date_str(df, window),
                     "Son Tarih": base.date_str(df, 0),
                 }
             )
 
     cols = ["Sembol", "Son", f"{window}G Fiyat %", "Hacim/20G Ort",
-            "Baslangic", "Son Tarih"]
+            "Başlangıç", "Son Tarih"]
     out = pd.DataFrame(rows, columns=cols)
     if not out.empty:
         out = out.sort_values("Hacim/20G Ort", ascending=False).reset_index(drop=True)

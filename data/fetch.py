@@ -1,8 +1,9 @@
 """
 Yahoo Finance'ten gecmis gunluk veri cekimi (yfinance).
 
-- auto_adjust=True -> DUZELTILMIS fiyat. BIST'te sik gorulen bedelsiz sermaye
-  artirimi/bolunme carpitmasi boylece otomatik duzeltilir.
+- auto_adjust=False -> hem HAM kapanis (Close) hem DUZELTILMIS kapanis (Adj Close)
+  alinir. Trend/getiri duzeltilmis fiyattan (bedelsiz/bolunme carpitmasi olmaz),
+  hacim cirosu ise ham fiyattan hesaplanir (lot*ham_fiyat bedelsizde sureklidir).
 - Ilk calistirmada ~2 yillik backfill; sonrasinda yalnizca eksik son gunler
   (incremental) cekilir. Yahoo erisilemezse onbellek korunur, cokme olmaz.
 - Hiz icin parti (batch) halinde indirilir.
@@ -28,17 +29,19 @@ def _normalize(df):
     df = df.rename(
         columns={
             "Open": "open", "High": "high", "Low": "low",
-            "Close": "close", "Adj Close": "close", "Volume": "volume",
+            "Close": "close", "Adj Close": "adj_close", "Volume": "volume",
         }
     )
-    keep = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
+    # Bazi durumlarda 'Adj Close' gelmezse ham kapanisi duzeltilmis olarak da kullan
+    if "adj_close" not in df.columns and "close" in df.columns:
+        df["adj_close"] = df["close"]
+    keep = [c for c in ["open", "high", "low", "close", "adj_close", "volume"]
+            if c in df.columns]
     df = df[keep]
-    # Kapanisi bos gunleri (ornekn henuz kapanmamis bugunku seans) at - yoksa
+    # Kapanisi bos gunleri (orn. henuz kapanmamis bugunku seans) at - yoksa
     # screener'larda close[-1] NaN olur.
-    if "close" in df.columns:
-        df = df.dropna(subset=["close"])
-    else:
-        df = df.dropna(how="all")
+    subset = [c for c in ["close", "adj_close"] if c in df.columns]
+    df = df.dropna(subset=subset) if subset else df.dropna(how="all")
     return df
 
 
@@ -50,12 +53,12 @@ def update_symbol(symbol, full=False):
         if last:
             # Son tarihten bugune (PK sayesinde tekrar eden gunler sorunsuz)
             df = yf.download(
-                yahoo, start=last, auto_adjust=True, progress=False,
+                yahoo, start=last, auto_adjust=False, progress=False,
                 threads=False,
             )
         else:
             df = yf.download(
-                yahoo, period=cfg.BACKFILL_PERIOD, auto_adjust=True,
+                yahoo, period=cfg.BACKFILL_PERIOD, auto_adjust=False,
                 progress=False, threads=False,
             )
     except Exception as e:  # ag hatasi vs. -> onbellek korunur
@@ -94,12 +97,12 @@ def update_all(symbols, names=None, progress_cb=None, batch_size=40, pause=0.4):
             if have_cache:
                 start = cache.global_min_last_date()
                 data = yf.download(
-                    yahoos, start=start, auto_adjust=True, progress=False,
+                    yahoos, start=start, auto_adjust=False, progress=False,
                     group_by="ticker", threads=True,
                 )
             else:
                 data = yf.download(
-                    yahoos, period=cfg.BACKFILL_PERIOD, auto_adjust=True,
+                    yahoos, period=cfg.BACKFILL_PERIOD, auto_adjust=False,
                     progress=False, group_by="ticker", threads=True,
                 )
         except Exception as e:

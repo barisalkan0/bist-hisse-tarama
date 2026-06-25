@@ -39,7 +39,10 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS prices (
             symbol TEXT, date TEXT,
-            open REAL, high REAL, low REAL, close REAL, volume INTEGER,
+            open REAL, high REAL, low REAL,
+            close REAL,        -- HAM kapanis (ciro/hacim hesabi icin)
+            adj_close REAL,    -- DUZELTILMIS kapanis (trend/getiri icin)
+            volume INTEGER,
             PRIMARY KEY (symbol, date)
         );
         CREATE TABLE IF NOT EXISTS meta (
@@ -53,8 +56,12 @@ def init_db():
         CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
         """
     )
+    # Eski semadan gelen veritabanlarina adj_close kolonunu ekle (yoksa)
+    cols = [r[1] for r in db.execute("PRAGMA table_info(prices)").fetchall()]
+    if "adj_close" not in cols:
+        db.execute("ALTER TABLE prices ADD COLUMN adj_close REAL")
     # Kapanisi bos satirlari temizle (henuz kapanmamis seans kaydi sizmis olabilir)
-    db.execute("DELETE FROM prices WHERE close IS NULL")
+    db.execute("DELETE FROM prices WHERE close IS NULL OR adj_close IS NULL")
     db.commit()
 
 
@@ -71,12 +78,13 @@ def upsert_prices(symbol, df):
             (
                 symbol, d,
                 _f(r.get("open")), _f(r.get("high")), _f(r.get("low")),
-                _f(r.get("close")), _i(r.get("volume")),
+                _f(r.get("close")), _f(r.get("adj_close")), _i(r.get("volume")),
             )
         )
     db.executemany(
-        "INSERT OR REPLACE INTO prices (symbol,date,open,high,low,close,volume) "
-        "VALUES (?,?,?,?,?,?,?)",
+        "INSERT OR REPLACE INTO prices "
+        "(symbol,date,open,high,low,close,adj_close,volume) "
+        "VALUES (?,?,?,?,?,?,?,?)",
         rows,
     )
     db.commit()
@@ -87,7 +95,7 @@ def get_prices(symbol):
     """Bir hissenin tum gunluk verisini pandas DataFrame olarak doner (tarih sirali)."""
     db = connect()
     df = pd.read_sql_query(
-        "SELECT date, open, high, low, close, volume FROM prices "
+        "SELECT date, open, high, low, close, adj_close, volume FROM prices "
         "WHERE symbol=? ORDER BY date",
         db, params=(symbol,), parse_dates=["date"],
     )

@@ -20,14 +20,17 @@ PERIODS = {
     "4 Ay": 84,
     "5 Ay": 105,
     "6 Ay": 126,
-    "1 Yil": 252,
+    "1 Yıl": 252,
 }
 
 # Toparlanma (son zamanda yukselme) penceresi secenekleri: etiket -> gun
 RECOVERY_WINDOWS = {
-    "Son 2 Gun": 2,
-    "Son 3 Gun": 3,
-    "Son 5 Gun": 5,
+    "Son 2 Gün": 2,
+    "Son 3 Gün": 3,
+    "Son 5 Gün": 5,
+    "Son 7 Gün": 7,
+    "Son 10 Gün": 10,
+    "Son 15 Gün": 15,
 }
 
 # --- Dipten Donus varsayilan esikleri ---
@@ -43,5 +46,6 @@ DEFAULT_VOLUME_MULTIPLE = 1.5     # Hacim, 20 gunluk ortalamanin bu kati uzerind
 SMA_SHORT = 20
 SMA_LONG = 50
 
-# Veri "bayat" sayilma esigi (gun) - bundan eskiyse uyari gosterilir
-STALE_DAYS = 4
+# Veri "bayat" sayilma esigi (IS GUNU) - bundan fazla geride ise uyari gosterilir.
+# Is gunu bazli oldugu icin hafta sonu/tatil yanlis uyari vermez.
+STALE_DAYS = 3

@@ -1,7 +1,11 @@
 """Tarama motoru icin ortak yardimcilar.
 
-Tum hesaplar onbellekteki DUZELTILMIS (adjusted) kapanis serisi uzerinden yapilir.
+Fiyat/trend hesaplari DUZELTILMIS kapanis (adj_close) uzerinden yapilir
+(bedelsiz/bolunme carpitmasi olmaz). Hacim karsilastirmasi ise CIRO
+(lot * ham kapanis) uzerinden yapilir; bu olcu bedelsizde sureklidir, yani
+hisse bedelsiz yapinca "hacim patladi" yanilsamasi olusmaz.
 """
+import numpy as np
 import pandas as pd
 
 from data import cache
@@ -19,7 +23,7 @@ def load_all(min_days=30, exclude_blacklist=True):
         if sym in black:
             continue
         df = cache.get_prices(sym)
-        if len(df) >= min_days:
+        if len(df) >= min_days and "adj_close" in df.columns:
             out[sym] = df
     return out
 
@@ -52,13 +56,18 @@ def down_day_ratio(close, lookback):
     return float((diffs < 0).sum() / len(diffs))
 
 
-def volume_ratio(volume, window):
-    """Son `window` gun ortalama hacmin, 20 gunluk ortalamaya orani."""
-    if len(volume) < cfg.SMA_SHORT + 1:
+def turnover_ratio(df, window):
+    """
+    Son `window` gun ortalama CIRO'nun (lot * ham kapanis), 20 gunluk ortalama
+    ciroya orani. Bedelsize dayanikli; lot bazli ham karsilastirmadaki yanilmayi
+    onler. Yetersiz veri -> None.
+    """
+    if len(df) < cfg.SMA_SHORT + 1:
         return None
-    recent = float(volume.iloc[-window:].mean())
-    base = float(volume.iloc[-cfg.SMA_SHORT :].mean())
-    if base == 0:
+    turnover = df["volume"].astype(float) * df["close"].astype(float)
+    recent = float(turnover.iloc[-window:].mean())
+    base = float(turnover.iloc[-cfg.SMA_SHORT :].mean())
+    if base == 0 or pd.isna(base):
         return None
     return recent / base
 
@@ -71,10 +80,13 @@ def date_str(df, offset=0):
     return df.index[idx].date().isoformat()
 
 
-def snapshot_son(symbol):
-    """mynet snapshot'tan guncel 'Son' fiyat (varsa)."""
-    snap = cache.get_snapshot()
-    row = snap[snap["symbol"] == symbol]
-    if not row.empty:
-        return float(row.iloc[0]["son"]) if pd.notna(row.iloc[0]["son"]) else None
-    return None
+def business_days_behind(date_iso):
+    """Verilen tarih ile bugun arasindaki IS GUNU sayisi (hafta sonu sayilmaz).
+    Bayatlik uyarisinin tatil/hafta sonu yuzunden yanlis yanmamasi icin kullanilir.
+    """
+    if not date_iso:
+        return None
+    try:
+        return int(np.busday_count(np.datetime64(date_iso), np.datetime64("today")))
+    except Exception:
+        return None
