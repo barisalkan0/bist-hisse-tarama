@@ -281,6 +281,8 @@ def style_results(df, favorites=None):
             fmt[c] = lambda v: tr_num(v, 2)
         elif c == "Hacim/20G Ort":
             fmt[c] = lambda v: (tr_num(v, 2) + "×") if pd.notna(v) else "—"
+        elif c == "İsabet":   # pozitif yıl oranı (%) - tek sayı, +/- renklendirmesiz
+            fmt[c] = lambda v: ("%" + tr_num(v, 0)) if pd.notna(v) else "—"
         elif c.endswith("Uzaklık"):
             fmt[c] = lambda v: (tr_num(v, 2) + "%") if pd.notna(v) else "—"
     sty = df.style
@@ -348,9 +350,14 @@ def render_table(df, key, fixed=("Sembol",), chart_days=126, height=None):
 with st.sidebar:
     st.header("BİST Hisse Tarama")
 
-    m1, m2 = st.columns(2)
-    m1.metric("Son kapanış", gmax or "—")
-    m2.metric("Hisse", len(cached_syms))
+    try:
+        _gd = date.fromisoformat(gmax) if gmax else None
+        _son_lbl = f"{_gd.day} {TR_AY[_gd.month - 1]} {_gd.year}" if _gd else "—"
+    except (ValueError, TypeError):
+        _son_lbl = gmax or "—"
+    # Tarih dar metrik kartında kesilmesin diye tam genişlik
+    st.metric("Son kapanış", _son_lbl)
+    st.metric("İzlenen hisse", len(cached_syms))
     st.caption("Değerler son **kesin kapanış** (gün sonu) bazlıdır; seans içi anlık "
                "fiyatlara takılmaz.")
 
@@ -399,7 +406,8 @@ with st.sidebar:
                        "isimlerini birebir görmüyorsan, Secrets'taki isim/format hatalıdır.")
     st.caption(
         "Gün sonu (EOD) veriye dayanır.\n\n"
-        "**Kaynak:** mynet (liste + anlık), Yahoo Finance (geçmiş, düzeltilmiş fiyat)."
+        "**Kaynak:** mynet (hisse listesi + isimler), İş Yatırım (geçmiş kapanış + "
+        "TL ciro, BİST-uyumlu **düzeltilmiş** fiyat)."
     )
 
 
@@ -412,16 +420,18 @@ def price_volume_chart(symbol, days):
         st.info("Bu hisse için geçmiş veri yok.")
         return
     sub = df.iloc[-days:] if days < len(df) else df
+    vmax = float(sub["volume"].max()) or 1.0
     fig = make_subplots(specs=[[{"secondary_y": True}]])
+    # Hacim: ALTTA dikey çubuklar (eksen 4×vmax'e kadar -> çubuklar en fazla %25 yükseklik)
     fig.add_trace(
         go.Bar(x=sub.index, y=sub["volume"], name="Hacim (TL)",
-               marker_color="rgba(79,70,229,0.16)"),
+               marker_color="rgba(79,70,229,0.22)"),
         secondary_y=True,
     )
+    # Fiyat: BASKIN, son (kapanış) değerlerine göre çizgi (dolgu yok -> hareket net görünür)
     fig.add_trace(
-        go.Scatter(x=sub.index, y=sub["adj_close"], name="Fiyat (düzeltilmiş)",
-                   mode="lines", line=dict(color="#4F46E5", width=2.4),
-                   fill="tozeroy", fillcolor="rgba(79,70,229,0.07)"),
+        go.Scatter(x=sub.index, y=sub["adj_close"], name="Fiyat (kapanış)",
+                   mode="lines", line=dict(color="#4F46E5", width=2.4)),
         secondary_y=False,
     )
     fig.update_layout(
@@ -435,7 +445,9 @@ def price_volume_chart(symbol, days):
     )
     fig.update_yaxes(title_text="Fiyat (TL)", secondary_y=False, showgrid=True,
                      gridcolor="rgba(0,0,0,0.05)")
-    fig.update_yaxes(title_text="Hacim", secondary_y=True, showgrid=False)
+    # Hacim eksenini 4×vmax'e sabitle -> çubuklar altta kalır, fiyat baskın görünür
+    fig.update_yaxes(title_text="Hacim (TL)", secondary_y=True, showgrid=False,
+                     range=[0, vmax * 4])
 
     # Turkce aylik eksen etiketleri (Jan -> Oca ...)
     tickvals, ticktext, seen = [], [], set()
