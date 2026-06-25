@@ -12,11 +12,14 @@ Gerekli gizli anahtarlar (Streamlit Cloud > Settings > Secrets, ya da ortam degi
 
 Gizleme listesi Redis'te 'blacklist' adli bir SET olarak tutulur.
 """
+import json
 import os
 
 import requests
 
 _BLACKLIST_KEY = "blacklist"
+_FAV_KEY = "favorites"
+_NOTES_KEY = "notes"
 
 
 def _from_secrets(key):
@@ -118,3 +121,59 @@ def blacklist_members():
         return None
     res = _cmd("SMEMBERS", _BLACKLIST_KEY)
     return list(res) if res else []
+
+
+# ---------- Favoriler (Redis SET) ----------
+def fav_add(symbol):
+    if enabled():
+        _cmd("SADD", _FAV_KEY, symbol)
+
+
+def fav_remove(symbol):
+    if enabled():
+        _cmd("SREM", _FAV_KEY, symbol)
+
+
+def fav_members():
+    if not enabled():
+        return None
+    res = _cmd("SMEMBERS", _FAV_KEY)
+    return list(res) if res else []
+
+
+# ---------- Notlar (Redis HASH: symbol -> JSON {text, date}) ----------
+def note_set(symbol, text, date):
+    if enabled():
+        _cmd("HSET", _NOTES_KEY, symbol, json.dumps({"text": text, "date": date}))
+
+
+def note_delete(symbol):
+    if enabled():
+        _cmd("HDEL", _NOTES_KEY, symbol)
+
+
+def _parse_note(v):
+    try:
+        d = json.loads(v)
+        if isinstance(d, dict):
+            return {"text": d.get("text", ""), "date": d.get("date", "")}
+    except Exception:
+        pass
+    return {"text": str(v), "date": ""}
+
+
+def note_all():
+    """Tum notlari {symbol: {text, date}} olarak doner. Devre disiysa None."""
+    if not enabled():
+        return None
+    res = _cmd("HGETALL", _NOTES_KEY)
+    out = {}
+    if isinstance(res, dict):
+        for f, v in res.items():
+            out[f] = _parse_note(v)
+    elif isinstance(res, list):
+        it = iter(res)
+        for f in it:
+            v = next(it, None)
+            out[f] = _parse_note(v)
+    return out

@@ -109,6 +109,10 @@ def init_db():
             hacim_lot INTEGER, hacim_tl REAL, saat TEXT, captured TEXT
         );
         CREATE TABLE IF NOT EXISTS blacklist (symbol TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS favorites (symbol TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS notes (
+            symbol TEXT PRIMARY KEY, text TEXT, date TEXT
+        );
         CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
         """
     )
@@ -311,6 +315,94 @@ def sync_blacklist_from_remote():
     db.execute("DELETE FROM blacklist")
     db.executemany("INSERT OR IGNORE INTO blacklist (symbol) VALUES (?)",
                    [(m,) for m in members])
+    db.commit()
+
+
+# ---------- favoriler (yerel + Upstash) ----------
+def add_favorite(symbol):
+    db = connect()
+    db.execute("INSERT OR IGNORE INTO favorites (symbol) VALUES (?)", (symbol,))
+    db.commit()
+    try:
+        store.fav_add(symbol)
+    except Exception:
+        pass
+
+
+def remove_favorite(symbol):
+    db = connect()
+    db.execute("DELETE FROM favorites WHERE symbol=?", (symbol,))
+    db.commit()
+    try:
+        store.fav_remove(symbol)
+    except Exception:
+        pass
+
+
+def get_favorites():
+    db = connect()
+    cur = db.execute("SELECT symbol FROM favorites ORDER BY symbol")
+    return [r[0] for r in cur.fetchall()]
+
+
+def sync_favorites_from_remote():
+    try:
+        members = store.fav_members()
+    except Exception:
+        members = None
+    if members is None:
+        return
+    db = connect()
+    db.execute("DELETE FROM favorites")
+    db.executemany("INSERT OR IGNORE INTO favorites (symbol) VALUES (?)",
+                   [(m,) for m in members])
+    db.commit()
+
+
+# ---------- notlar (yerel + Upstash) ----------
+def set_note(symbol, text):
+    """Bir hisse icin notu kaydeder/gunceller; tarihi otomatik damgalanir."""
+    date = datetime.now().strftime("%Y-%m-%d %H:%M")
+    db = connect()
+    db.execute("INSERT OR REPLACE INTO notes (symbol, text, date) VALUES (?,?,?)",
+               (symbol, text, date))
+    db.commit()
+    try:
+        store.note_set(symbol, text, date)
+    except Exception:
+        pass
+
+
+def delete_note(symbol):
+    db = connect()
+    db.execute("DELETE FROM notes WHERE symbol=?", (symbol,))
+    db.commit()
+    try:
+        store.note_delete(symbol)
+    except Exception:
+        pass
+
+
+def get_notes():
+    """{symbol: {'text':..., 'date':...}} doner."""
+    db = connect()
+    cur = db.execute("SELECT symbol, text, date FROM notes")
+    return {r[0]: {"text": r[1], "date": r[2]} for r in cur.fetchall()}
+
+
+def sync_notes_from_remote():
+    try:
+        alln = store.note_all()
+    except Exception:
+        alln = None
+    if alln is None:
+        return
+    db = connect()
+    db.execute("DELETE FROM notes")
+    db.executemany(
+        "INSERT OR REPLACE INTO notes (symbol, text, date) VALUES (?,?,?)",
+        [(s, n.get("text", ""), n.get("date", "")) for s, n in alln.items()],
+    )
     db.commit()
 
 
