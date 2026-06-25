@@ -13,9 +13,23 @@ import os
 import shutil
 import sqlite3
 import tempfile
-from datetime import datetime, date
+from datetime import datetime, date, time as dttime, timezone, timedelta
 
 import pandas as pd
+
+# BIST seansi ~18:10'da kapanir. Kapanis kesinlesmeden (bu saatten once) o gunun
+# verisi ANLIK/gecicidir; saklamayiz. 18:30'u guvenli esik aliriz (15 dk gecikme payi).
+_IST = timezone(timedelta(hours=3))
+_SESSION_FINAL = dttime(18, 30)
+
+
+def provisional_date():
+    """Bugunku seans henuz kesinlesmediyse bugunun tarihini (ISO), aksi halde None doner.
+    Saat dilimi İstanbul'a sabitlenir (bulut UTC'de calissa bile dogru olsun)."""
+    ist = datetime.now(_IST)
+    if ist.time() < _SESSION_FINAL:
+        return ist.date().isoformat()
+    return None
 
 import settings as cfg
 from data import store
@@ -104,6 +118,10 @@ def init_db():
         db.execute("ALTER TABLE prices ADD COLUMN adj_close REAL")
     # Kapanisi bos satirlari temizle (henuz kapanmamis seans kaydi sizmis olabilir)
     db.execute("DELETE FROM prices WHERE close IS NULL OR adj_close IS NULL")
+    # Seans kesinlesmeden once sizmis bugunku ANLIK satirlari temizle
+    pv = provisional_date()
+    if pv:
+        db.execute("DELETE FROM prices WHERE date = ?", (pv,))
     db.commit()
 
 
@@ -210,6 +228,37 @@ def save_snapshot(rows):
 def get_snapshot():
     db = connect()
     return pd.read_sql_query("SELECT * FROM snapshot ORDER BY symbol", db)
+
+
+def closing_snapshot():
+    """
+    KAPANIS (gun sonu) bazli anlik-benzeri tablo. mynet'in canli snapshot'i yerine
+    kullanilir; boylece seans ici oynamalara takilmadan hep son kapanis gosterilir.
+    Son = ham kapanis; Fark % = duzeltilmis kapanislardan (bedelsiz yanilmaz);
+    Hacim = son kapanis hacmi. Doner: symbol, ad, son, fark, hacim_lot, hacim_tl, tarih.
+    """
+    db = connect()
+    q = """
+    WITH ranked AS (
+      SELECT symbol, date, close, adj_close, volume,
+             ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
+      FROM prices
+    )
+    SELECT l.symbol AS symbol,
+           COALESCE(m.name, l.symbol) AS ad,
+           l.close AS son,
+           CASE WHEN p.adj_close IS NOT NULL AND p.adj_close <> 0
+                THEN (l.adj_close / p.adj_close - 1.0) * 100.0 END AS fark,
+           l.volume AS hacim_lot,
+           l.close * l.volume AS hacim_tl,
+           l.date AS tarih
+    FROM ranked l
+    LEFT JOIN ranked p ON p.symbol = l.symbol AND p.rn = 2
+    LEFT JOIN meta m ON m.symbol = l.symbol
+    WHERE l.rn = 1
+    ORDER BY l.symbol
+    """
+    return pd.read_sql_query(q, db)
 
 
 def snapshot_symbols():

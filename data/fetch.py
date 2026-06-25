@@ -42,6 +42,10 @@ def _normalize(df):
     # screener'larda close[-1] NaN olur.
     subset = [c for c in ["close", "adj_close"] if c in df.columns]
     df = df.dropna(subset=subset) if subset else df.dropna(how="all")
+    # Seans kesinlesmeden once bugunku ANLIK satiri ELE (sadece kesin kapanislar kalsin)
+    pv = cache.provisional_date()
+    if pv is not None and len(df):
+        df = df[[ts.date().isoformat() != pv for ts in df.index]]
     return df
 
 

@@ -86,22 +86,25 @@ def load_data(version):
 
 
 @st.cache_data(show_spinner=False)
-def load_snapshot(version):
-    snap = cache.get_snapshot()
+def load_closing(version):
+    """Gösterimde kullanılan KAPANIŞ (gün sonu) tablosu + Son/Fark haritaları.
+    Canlı mynet snapshot'ı yerine kapanış verisinden üretilir; anlık oynamalara
+    takılmaz, hep son kesin kapanışı gösterir."""
+    cs = cache.closing_snapshot()
     son_map, fark_map = {}, {}
-    if not snap.empty:
-        for _, r in snap.iterrows():
+    if not cs.empty:
+        for _, r in cs.iterrows():
             if pd.notna(r["son"]):
                 son_map[r["symbol"]] = r["son"]
             if pd.notna(r["fark"]):
                 fark_map[r["symbol"]] = r["fark"]
-    return snap, son_map, fark_map
+    return cs, son_map, fark_map
 
 
 def bump_version():
     st.session_state["data_version"] = _data_version() + 1
     load_data.clear()
-    load_snapshot.clear()
+    load_closing.clear()
 
 
 # ----------------------------------------------------------------------------
@@ -167,17 +170,17 @@ if "boot" not in st.session_state:
         cache.sync_blacklist_from_remote()
     except Exception:
         pass
-    with st.spinner("Anlık veriler alınıyor..."):
+    with st.spinner("Hisse listesi alınıyor..."):
         try:
-            refresh_snapshot()
-        except Exception as e:
-            st.warning(f"mynet anlık verisi alınamadı (internet?): {e}")
+            refresh_snapshot()   # yalnızca sembol listesi + isimler için
+        except Exception:
+            pass  # liste alınamazsa önbellekteki sembollerle devam
     maybe_auto_update()
     st.session_state["boot"] = True
     bump_version()
 
 
-snap_df, son_map, fark_map = load_snapshot(_data_version())
+close_df, son_map, fark_map = load_closing(_data_version())
 cached_syms = cache.symbols_in_cache()
 
 
@@ -244,11 +247,10 @@ with st.sidebar:
         gmax = cache.connect().execute("SELECT MAX(date) FROM prices").fetchone()[0]
 
     m1, m2 = st.columns(2)
-    m1.metric("Veri tarihi", gmax or "—")
+    m1.metric("Son kapanış", gmax or "—")
     m2.metric("Hisse", len(cached_syms))
-    if not snap_df.empty:
-        cap = str(snap_df["captured"].max()).replace("T", " ")[:16]
-        st.caption(f"📡 Anlık veri (mynet): {cap}")
+    st.caption("Değerler son **kesin kapanış** (gün sonu) bazlıdır; seans içi anlık "
+               "fiyatlara takılmaz.")
 
     # Bayatlık uyarısı — İŞ GÜNÜ bazlı (tatil/hafta sonu yanlış uyarmasın)
     if gmax:
@@ -435,14 +437,14 @@ with tab2:
 
 # --- Tab 3: Tüm Hisseler (mynet anlık) ---
 with tab3:
-    st.subheader("Tüm hisseler — anlık (mynet)")
-    if snap_df.empty:
-        st.info("Anlık veri yok. Kenar çubuğundan güncelleyin.")
+    st.subheader("Tüm hisseler — son kapanış")
+    if close_df.empty:
+        st.info("Veri yok. Kenar çubuğundan güncelleyin.")
     else:
-        show = snap_df[["symbol", "name", "son", "fark", "hacim_lot",
-                        "hacim_tl", "saat"]].copy()
+        show = close_df[["symbol", "ad", "son", "fark", "hacim_lot",
+                         "hacim_tl", "tarih"]].copy()
         show.columns = ["Sembol", "Ad", "Son", "Fark %", "Hacim (Lot)",
-                        "Hacim (TL)", "Saat"]
+                        "Hacim (TL)", "Tarih"]
         q = st.text_input("Hisse ara", "").strip().upper()
         cols = column_popover(list(show.columns), "t3", fixed=("Sembol",))
         if q:
@@ -457,7 +459,7 @@ with tab3:
                 "Hacim (TL)": st.column_config.NumberColumn(format="%.0f"),
             },
         )
-        st.caption(f"Toplam {len(show)} hisse.")
+        st.caption(f"Toplam {len(show)} hisse — son kesin kapanış.")
 
 
 # --- Tab 4: Devre Dışı (kara liste) ---
@@ -466,8 +468,8 @@ with tab4:
     st.caption("Buradaki hisseler taramalarda gösterilmez.")
     black = cache.get_blacklist()
     base_syms = set(cached_syms)
-    if not snap_df.empty:
-        base_syms |= set(snap_df["symbol"])
+    if not close_df.empty:
+        base_syms |= set(close_df["symbol"])
     all_syms = sorted(base_syms)
 
     add = st.multiselect("Gizlenecek hisse ekle", [s for s in all_syms if s not in black])
