@@ -1,0 +1,2 @@
+# SQLite veritabanlari ikili (binary) - satir sonu donusumu YAPILMASIN.
+*.sqlite binary

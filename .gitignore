@@ -6,4 +6,7 @@ __pycache__/
 # Gecici loglar
 *.log
 
-# NOT: data/cache.sqlite BILEREK dahil edilir (bulutta veri hazir gelsin diye).
+# Calisma veritabani (yazilabilir, runtime'da uretilir) - COMMIT EDILMEZ.
+# Bunun yerine salt-okunur data/seed.sqlite repoda durur ve calisma kopyasi
+# acilista ondan uretilir.
+data/cache.sqlite

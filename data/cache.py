@@ -10,7 +10,9 @@ Tablolar:
   settings  -> arayuz tercih/esik kaliciligi (key/value)
 """
 import os
+import shutil
 import sqlite3
+import tempfile
 from datetime import datetime, date
 
 import pandas as pd
@@ -21,15 +23,54 @@ from data import store
 _DB = None
 
 
-def _path():
-    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(here, cfg.DB_PATH)
+def _repo():
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _seed_path():
+    return os.path.join(_repo(), cfg.SEED_PATH)
+
+
+def _work_path():
+    """
+    Yazilabilir CALISMA veritabani yolu. Streamlit Cloud'da repo /mount/src altinda
+    ve dosya sistemi gecici; ayrica commit'lenen dosyaya runtime'da yazmak git pull
+    ile cakisip dosyayi bozuyor. Bu yuzden bulutta /tmp altinda calisiriz; commit'lenen
+    seed'e ASLA yazmayiz. Yerelde repo altindaki calisma dosyasi kullanilir.
+    """
+    repo = _repo()
+    if repo.replace("\\", "/").startswith("/mount/src") or os.environ.get("HISSE_USE_TMP_DB"):
+        return os.path.join(tempfile.gettempdir(), "hisse_cache.sqlite")
+    return os.path.join(repo, cfg.DB_PATH)
+
+
+def _ensure_seeded(work):
+    """Calisma DB'si yoksa veya bozuksa, commit'lenen seed'den kopyalar."""
+    need = not os.path.exists(work)
+    if not need:
+        try:
+            c = sqlite3.connect(work)
+            ok = c.execute("PRAGMA integrity_check").fetchone()[0]
+            c.close()
+            need = (ok != "ok")
+        except Exception:
+            need = True
+    if need:
+        seed = _seed_path()
+        if os.path.exists(seed):
+            try:
+                os.makedirs(os.path.dirname(work), exist_ok=True)
+                shutil.copy2(seed, work)
+            except Exception:
+                pass
 
 
 def connect():
     global _DB
     if _DB is None:
-        _DB = sqlite3.connect(_path(), check_same_thread=False)
+        work = _work_path()
+        _ensure_seeded(work)
+        _DB = sqlite3.connect(work, check_same_thread=False)
         _DB.row_factory = sqlite3.Row
     return _DB
 

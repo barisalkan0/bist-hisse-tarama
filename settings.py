@@ -1,7 +1,10 @@
 """Uygulama genel ayarlari ve varsayilan esik degerleri."""
 
-# Veritabani dosyasi (data klasoru altinda)
+# Calisma veritabani (yazilabilir; commit EDILMEZ, .gitignore'da)
 DB_PATH = "data/cache.sqlite"
+# Salt-okunur tohum (seed) veritabani - repoda durur, calisma kopyasi bundan uretilir.
+# Uygulama bu dosyaya ASLA yazmaz (bulutta git pull ile cakisip bozulmasin diye).
+SEED_PATH = "data/seed.sqlite"
 
 # mynet canli borsa sayfasi (sembol listesi + gunluk snapshot kaynagi)
 MYNET_URL = "https://finans.mynet.com/borsa/canliborsa/"
