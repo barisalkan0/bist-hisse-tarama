@@ -212,17 +212,24 @@ def style_results(df):
     return sty.format(fmt, na_rep="—")
 
 
+def column_popover(columns, key, fixed=("Sembol",)):
+    """Küçük bir butona tıklayınca açılan, tikli (checkbox) sütun seç/gizle menüsü.
+    Seçili sütun adlarını (orijinal sırada) döndürür."""
+    optional = [c for c in columns if c not in fixed]
+    with st.popover("⚙️ Sütunlar"):
+        st.caption("Görünecek sütunlar")
+        for c in optional:
+            st.checkbox(c, value=True, key=f"colchk_{key}_{c}")
+    chosen = [c for c in optional if st.session_state.get(f"colchk_{key}_{c}", True)]
+    return [c for c in columns if c in fixed or c in chosen]
+
+
 def render_table(df, key, fixed=("Sembol",)):
-    """Sütun seç/gizle kontrolü olan biçimli sonuç tablosu.
-    İstenmeyen sütunlar üstteki kutudan kapatılıp tekrar açılabilir."""
+    """Sütun seç/gizle (popover) kontrollü, biçimli sonuç tablosu."""
     if df.empty:
         st.dataframe(df, width="stretch", hide_index=True)
         return
-    optional = [c for c in df.columns if c not in fixed]
-    chosen = st.multiselect("Görünecek sütunlar", optional, default=optional,
-                            key=f"cols_{key}",
-                            help="Sütunları kapatıp tekrar açabilirsiniz.")
-    cols = [c for c in df.columns if c in fixed or c in chosen]
+    cols = column_popover(list(df.columns), key, fixed)
     st.dataframe(style_results(df[cols]), width="stretch", hide_index=True)
 
 
@@ -365,14 +372,11 @@ data = load_data(_data_version())
 # --- Tab 1: Dipten Dönüş ---
 with tab1:
     st.subheader("Uzun süredir düşüp son günlerde toparlayanlar")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        period_lbl = st.selectbox("Dönem", list(cfg.PERIODS.keys()), index=2)
-    with c2:
-        recov_lbl = st.selectbox("Toparlanma penceresi",
-                                 list(cfg.RECOVERY_WINDOWS.keys()), index=1)
-    with c3:
-        method_lbl = st.radio("Düşüş tanımı", ["Trend bazlı", "Katı (gün sayısı)"])
+    period_lbl = st.pills("Dönem", list(cfg.PERIODS.keys()),
+                          default="3 Ay", selection_mode="single") or "3 Ay"
+    recov_lbl = st.pills("Toparlanma penceresi", list(cfg.RECOVERY_WINDOWS.keys()),
+                         default="Son 3 Gün", selection_mode="single") or "Son 3 Gün"
+    method_lbl = st.radio("Düşüş tanımı", ["Katı (gün sayısı)", "Trend bazlı"])
 
     if method_lbl == "Trend bazlı":
         decline = st.slider("Dönemde en az düşüş (%)", 5, 60, int(cfg.DEFAULT_DECLINE_PCT))
@@ -439,18 +443,11 @@ with tab3:
                         "hacim_tl", "saat"]].copy()
         show.columns = ["Sembol", "Ad", "Son", "Fark %", "Hacim (Lot)",
                         "Hacim (TL)", "Saat"]
-        c_search, c_cols = st.columns([1, 2])
-        with c_search:
-            q = st.text_input("Hisse ara", "").strip().upper()
-        with c_cols:
-            optional = [c for c in show.columns if c != "Sembol"]
-            chosen = st.multiselect("Görünecek sütunlar", optional, default=optional,
-                                    key="cols_t3",
-                                    help="Sütunları kapatıp tekrar açabilirsiniz.")
+        q = st.text_input("Hisse ara", "").strip().upper()
+        cols = column_popover(list(show.columns), "t3", fixed=("Sembol",))
         if q:
             show = show[show["Sembol"].str.contains(q)
                         | show["Ad"].str.upper().str.contains(q)]
-        cols = [c for c in show.columns if c == "Sembol" or c in chosen]
         st.dataframe(
             show[cols], width="stretch", hide_index=True, height=520,
             column_config={
