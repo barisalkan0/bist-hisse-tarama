@@ -38,13 +38,25 @@ def monthly_returns(df, drop_incomplete=True):
 
 
 def _month_stats(ret, month):
-    """Tek ay (1-12) için: (ort_getiri, pozitif_yil, toplam_yil) ya da None."""
+    """Tek ay (1-12) için: (ort, medyan, pozitif_yil, toplam_yil) ya da None.
+    Medyan, uç (patlama) yıllara karşı dayanıklı 'tipik' ölçüdür."""
     if ret.empty:
         return None
     vals = ret[ret.index.month == month]
     if len(vals) == 0:
         return None
-    return float(vals.mean()), int((vals > 0).sum()), int(len(vals))
+    return float(vals.mean()), float(vals.median()), int((vals > 0).sum()), int(len(vals))
+
+
+def month_year_breakdown(df, month):
+    """Bir ayın yıl yıl gerçek getirisi (DataFrame: Yıl, Getiri %).
+    'Bu ortalama hangi yıldan geliyor?' sorusunu gözle doğrulamak için."""
+    ret = monthly_returns(df)
+    if ret.empty:
+        return pd.DataFrame(columns=["Yıl", "Getiri %"])
+    vals = ret[ret.index.month == month]
+    rows = [{"Yıl": int(d.year), "Getiri %": round(float(v), 2)} for d, v in vals.items()]
+    return pd.DataFrame(rows, columns=["Yıl", "Getiri %"])
 
 
 def stock_seasonality(df):
@@ -58,11 +70,12 @@ def stock_seasonality(df):
         st = _month_stats(ret, m)
         if st is None:
             continue
-        avg, pos, yrs = st
+        avg, med, pos, yrs = st
         rows.append({
             "Ay": AY_TAM[m - 1],
             "_m": m,
             "Ort. Getiri %": round(avg, 2),
+            "Medyan %": round(med, 2),
             "Mevsimsel Fark %": round(avg - overall, 2),
             "İsabet": f"{pos}/{yrs}",
             "Yıl": yrs,
@@ -85,18 +98,19 @@ def month_scan(all_monthly, month, min_years=7, strong=True):
         st = _month_stats(ret, month)
         if st is None:
             continue
-        avg, pos, yrs = st
+        avg, med, pos, yrs = st
         if yrs < min_years:
             continue
         overall = float(ret.mean())
         rows.append({
             "Sembol": sym,
             "Ort. Getiri %": round(avg, 2),
+            "Medyan %": round(med, 2),
             "Mevsimsel Fark %": round(avg - overall, 2),
             "İsabet": f"{pos}/{yrs}",
             "Yıl": yrs,
         })
-    cols = ["Sembol", "Ort. Getiri %", "Mevsimsel Fark %", "İsabet", "Yıl"]
+    cols = ["Sembol", "Ort. Getiri %", "Medyan %", "Mevsimsel Fark %", "İsabet", "Yıl"]
     out = pd.DataFrame(rows, columns=cols)
     if not out.empty:
         out = out.sort_values("Mevsimsel Fark %", ascending=not strong).reset_index(drop=True)

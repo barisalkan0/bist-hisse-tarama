@@ -663,7 +663,40 @@ with tab_mevsim:
                 st.plotly_chart(fig, width="stretch")
                 st.dataframe(style_results(seas.drop(columns=["_m"])),
                              width="stretch", hide_index=True)
-                st.caption(f"{sym} için {yrs} yıllık aylık veriye dayanır.")
+                st.caption(f"{sym} için {yrs} yıllık aylık veriye dayanır. "
+                           "**Medyan**, uç (patlama) yıllara karşı dayanıklı 'tipik' getiridir; "
+                           "ortalamadan çok farklıysa o ay birkaç uç yıldan beslenmiştir.")
+
+                # 🔍 Yıl yıl döküm — ortalamanın arkasını gör
+                st.divider()
+                st.markdown("**🔍 Yıl yıl döküm** — bir ayın ortalamasının hangi yıldan "
+                            "geldiğini kendi gözünle gör:")
+                strong_m = int(seas.loc[seas["Mevsimsel Fark %"].idxmax(), "_m"])
+                bm = st.selectbox("Ay", list(range(1, 13)), index=strong_m - 1,
+                                  format_func=lambda m: mevsim.AY_TAM[m - 1],
+                                  key="mevsim_bd_ay")
+                bd = mevsim.month_year_breakdown(monthly[sym], bm)
+                if bd.empty:
+                    st.info("Bu ay için yıl yıl veri yok.")
+                else:
+                    bcolors = ["#15803D" if v >= 0 else "#DC2626" for v in bd["Getiri %"]]
+                    f2 = go.Figure(go.Bar(x=bd["Yıl"].astype(str), y=bd["Getiri %"],
+                                          marker_color=bcolors))
+                    f2.update_layout(
+                        template="plotly_white", height=300,
+                        margin=dict(l=10, r=10, t=46, b=10),
+                        title=dict(text=f"<b>{sym} — {mevsim.AY_TAM[bm - 1]}</b> ayı, "
+                                        "yıl yıl getirisi (%)", font=dict(size=14)),
+                        yaxis_title="Getiri %")
+                    st.plotly_chart(f2, width="stretch")
+                    bdv = bd.copy()
+                    bdv["Yıl"] = bdv["Yıl"].astype(str)
+                    st.dataframe(style_results(bdv), width="stretch", hide_index=True)
+                    ort = float(bd["Getiri %"].mean())
+                    med = float(bd["Getiri %"].median())
+                    st.caption(f"**{mevsim.AY_TAM[bm - 1]}** → Ortalama **{tr_num(ort, 1)}%** · "
+                               f"Medyan **{tr_num(med, 1)}%**. İkisi çok farklıysa, "
+                               "büyük ortalamayı birkaç uç yıl şişiriyordur — dikkat.")
 
         else:  # Ay taraması
             next_m = (date.today().month % 12) + 1
