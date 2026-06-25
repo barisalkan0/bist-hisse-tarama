@@ -9,11 +9,11 @@ Borsa İstanbul hisselerini tarayan basit bir Streamlit uygulaması:
 
 ## Veri kaynakları
 
-- Hisse listesi + anlık fiyatlar: **mynet canlı borsa**
-- Geçmiş günlük veriler (düzeltilmiş fiyat): **Yahoo Finance** (`yfinance`)
+- Hisse listesi + isimler: **mynet canlı borsa**
+- Geçmiş veriler (düzeltilmiş kapanış + TL ciro): **İş Yatırım** (`HGDG_KAPANIS` / `HGDG_HACIM`)
 
-Veriler gün sonu (EOD) bazlıdır. Bedelsiz/bölünme etkileri düzeltilmiş fiyatla
-otomatik düzeltilir.
+Veriler gün sonu (EOD) bazlıdır. Bedelsiz/bölünme etkileri İş Yatırım'ın BİST-uyumlu
+**düzeltilmiş** serisiyle otomatik giderilir (Yahoo BİST'te bunu yapmadığı için bırakıldı).
 
 ## Çalıştırma
 

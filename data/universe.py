@@ -54,7 +54,7 @@ def fetch_universe(timeout=20):
     mynet'ten tum hisseleri ceker.
 
     Donen: list[dict] -> her biri:
-      symbol, name, yahoo, son, fark, yuksek, dusuk, alis, satis, aof,
+      symbol, name, son, fark, yuksek, dusuk, alis, satis, aof,
       hacim_lot, hacim_tl, saat
     Hata olursa istisna firlatir (cagiran taraf yakalar, snapshot opsiyoneldir).
     """
@@ -80,7 +80,6 @@ def fetch_universe(timeout=20):
             {
                 "symbol": ticker,
                 "name": _name_from_slug(ticker, slug),
-                "yahoo": ticker + settings.YAHOO_SUFFIX,
                 "son": _tr_float(son),
                 "yuksek": _tr_float(yuksek),
                 "dusuk": _tr_float(dusuk),

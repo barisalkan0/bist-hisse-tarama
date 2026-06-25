@@ -1,9 +1,8 @@
 """Tarama motoru icin ortak yardimcilar.
 
-Fiyat/trend hesaplari DUZELTILMIS kapanis (adj_close) uzerinden yapilir
-(bedelsiz/bolunme carpitmasi olmaz). Hacim karsilastirmasi ise CIRO
-(lot * ham kapanis) uzerinden yapilir; bu olcu bedelsizde sureklidir, yani
-hisse bedelsiz yapinca "hacim patladi" yanilsamasi olusmaz.
+Fiyat/trend hesaplari DUZELTILMIS kapanis (adj_close = Is Yatirim HGDG_KAPANIS)
+uzerinden yapilir (bedelsiz/bolunme carpitmasi olmaz). Hacim karsilastirmasi ise
+TL CIRO (HGDG_HACIM) uzerinden yapilir; bu olcu bedelsizde sureklidir.
 """
 import numpy as np
 import pandas as pd
@@ -58,13 +57,13 @@ def down_day_ratio(close, lookback):
 
 def turnover_ratio(df, window):
     """
-    Son `window` gun ortalama CIRO'nun (lot * ham kapanis), 20 gunluk ortalama
-    ciroya orani. Bedelsize dayanikli; lot bazli ham karsilastirmadaki yanilmayi
-    onler. Yetersiz veri -> None.
+    Son `window` gun ortalama CIRO'nun, 20 gunluk ortalama ciroya orani.
+    `volume` zaten Is Yatirim TL cirosudur (HGDG_HACIM); bedelsize dayaniklidir.
+    Yetersiz veri -> None.
     """
     if len(df) < cfg.SMA_SHORT + 1:
         return None
-    turnover = df["volume"].astype(float) * df["close"].astype(float)
+    turnover = df["volume"].astype(float)
     recent = float(turnover.iloc[-window:].mean())
     base = float(turnover.iloc[-cfg.SMA_SHORT :].mean())
     if base == 0 or pd.isna(base):

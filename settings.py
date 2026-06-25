@@ -6,14 +6,20 @@ DB_PATH = "data/cache.sqlite"
 # Uygulama bu dosyaya ASLA yazmaz (bulutta git pull ile cakisip bozulmasin diye).
 SEED_PATH = "data/seed.sqlite"
 
-# mynet canli borsa sayfasi (sembol listesi + gunluk snapshot kaynagi)
+# mynet canli borsa sayfasi (sembol listesi + isimler kaynagi)
 MYNET_URL = "https://finans.mynet.com/borsa/canliborsa/"
 
-# Yahoo Finance icin BIST sembol soneki
-YAHOO_SUFFIX = ".IS"
+# Gecmis veri kaynagi: Is Yatirim (BIST-uyumlu DUZELTILMIS kapanis + TL ciro).
+# HGDG_KAPANIS = duzeltilmis kapanis (bedelsiz/bolunme yansitilmis), HGDG_HACIM = TL ciro.
+# NOT: Yahoo BIST'te bedelsizi DUZELTMEDIGI icin birakildi (sahte cokus/sicrama uretiyordu).
+ISYATIRIM_URL = (
+    "https://www.isyatirim.com.tr/_layouts/15/"
+    "IsYatirim.Website/Common/Data.aspx/HisseTekil"
+)
 
-# Ilk indirmede kac yillik gecmis cekilecek
-BACKFILL_PERIOD = "2y"
+# Gunluk backfill derinligi (yil) ve mevsimsellik icin aylik gecmis derinligi (yil)
+BACKFILL_YEARS = 2
+MONTHLY_YEARS = 15
 
 # Donem secenekleri: etiket -> islem gunu sayisi (yaklasik)
 PERIODS = {

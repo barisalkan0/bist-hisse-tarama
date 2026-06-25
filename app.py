@@ -414,7 +414,7 @@ def price_volume_chart(symbol, days):
     sub = df.iloc[-days:] if days < len(df) else df
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_trace(
-        go.Bar(x=sub.index, y=sub["volume"], name="Hacim (lot)",
+        go.Bar(x=sub.index, y=sub["volume"], name="Hacim (TL)",
                marker_color="rgba(79,70,229,0.16)"),
         secondary_y=True,
     )
@@ -591,7 +591,7 @@ with tab2:
         mult = st.slider("Hacim, 20G ortalamanın en az katı", 1.0, 4.0,
                          float(cfg.DEFAULT_VOLUME_MULTIPLE), 0.1)
 
-    st.caption("Hacim karşılaştırması ciro (lot × fiyat) bazlıdır; bedelsiz/bölünme "
+    st.caption("Hacim karşılaştırması TL ciro (İş Yatırım) bazlıdır; bedelsiz/bölünme "
                "yanılmasına karşı dayanıklıdır.")
 
     if not data:

@@ -320,8 +320,9 @@ def closing_snapshot():
     """
     KAPANIS (gun sonu) bazli anlik-benzeri tablo. mynet'in canli snapshot'i yerine
     kullanilir; boylece seans ici oynamalara takilmadan hep son kapanis gosterilir.
-    Son = ham kapanis; Fark % = duzeltilmis kapanislardan (bedelsiz yanilmaz);
-    Hacim = son kapanis hacmi. Doner: symbol, ad, son, fark, hacim_lot, hacim_tl, tarih.
+    Son = duzeltilmis kapanis (= guncel fiyat); Fark % = duzeltilmis kapanislardan
+    (bedelsiz yanilmaz); Hacim = Is Yatirim TL cirosu (HGDG_HACIM), Lot ~ ciro/fiyat.
+    Doner: symbol, ad, son, fark, hacim_lot, hacim_tl, tarih.
     """
     db = connect()
     q = """
@@ -335,8 +336,9 @@ def closing_snapshot():
            l.close AS son,
            CASE WHEN p.adj_close IS NOT NULL AND p.adj_close <> 0
                 THEN (l.adj_close / p.adj_close - 1.0) * 100.0 END AS fark,
-           l.volume AS hacim_lot,
-           l.close * l.volume AS hacim_tl,
+           CASE WHEN l.close IS NOT NULL AND l.close <> 0
+                THEN l.volume / l.close END AS hacim_lot,
+           l.volume AS hacim_tl,
            l.date AS tarih
     FROM ranked l
     LEFT JOIN ranked p ON p.symbol = l.symbol AND p.rn = 2
