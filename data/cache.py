@@ -16,6 +16,7 @@ from datetime import datetime, date
 import pandas as pd
 
 import settings as cfg
+from data import store
 
 _DB = None
 
@@ -177,22 +178,50 @@ def snapshot_symbols():
 
 
 # ---------- blacklist ----------
+# Yereldeki SQLite hizli okuma icindir; kalici kaynak (varsa) Upstash'tir.
 def add_blacklist(symbol):
     db = connect()
     db.execute("INSERT OR IGNORE INTO blacklist (symbol) VALUES (?)", (symbol,))
     db.commit()
+    try:
+        store.blacklist_add(symbol)   # kalici depoya da yaz
+    except Exception:
+        pass
 
 
 def remove_blacklist(symbol):
     db = connect()
     db.execute("DELETE FROM blacklist WHERE symbol=?", (symbol,))
     db.commit()
+    try:
+        store.blacklist_remove(symbol)
+    except Exception:
+        pass
 
 
 def get_blacklist():
     db = connect()
     cur = db.execute("SELECT symbol FROM blacklist ORDER BY symbol")
     return [r[0] for r in cur.fetchall()]
+
+
+def sync_blacklist_from_remote():
+    """
+    Kalici depo (Upstash) etkinse, gizleme listesini oradan cekip yereli onunla
+    esitler. Acilista bir kez cagrilir; boylece yeniden baslamada liste kaybolmaz.
+    Devre disiysa (yerel kullanim) hicbir sey yapmaz.
+    """
+    try:
+        members = store.blacklist_members()
+    except Exception:
+        members = None
+    if members is None:
+        return  # Upstash devre disi -> yerel liste korunur
+    db = connect()
+    db.execute("DELETE FROM blacklist")
+    db.executemany("INSERT OR IGNORE INTO blacklist (symbol) VALUES (?)",
+                   [(m,) for m in members])
+    db.commit()
 
 
 # ---------- settings ----------

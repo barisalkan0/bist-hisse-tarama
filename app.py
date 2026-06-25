@@ -154,6 +154,11 @@ def maybe_auto_update():
 
 # İlk açılışta: mynet snapshot'ı çek + geçmiş veride eksik günleri otomatik tamamla.
 if "boot" not in st.session_state:
+    # Gizleme listesini kalici depodan (Upstash) esitle - yeniden baslamada kaybolmasin
+    try:
+        cache.sync_blacklist_from_remote()
+    except Exception:
+        pass
     with st.spinner("Anlık veriler alınıyor..."):
         try:
             refresh_snapshot()
