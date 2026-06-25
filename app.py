@@ -13,7 +13,7 @@ import streamlit as st
 
 import settings as cfg
 from data import cache, universe, fetch, store
-from screeners import base, dip_donus, hacim_fiyat
+from screeners import base, dip_donus, hacim_fiyat, hafta52
 
 st.set_page_config(page_title="BİST Hisse Tarama", page_icon="📈", layout="wide")
 
@@ -276,6 +276,8 @@ def style_results(df, favorites=None):
             fmt[c] = lambda v: tr_num(v, 2)
         elif c == "Hacim/20G Ort":
             fmt[c] = lambda v: (tr_num(v, 2) + "×") if pd.notna(v) else "—"
+        elif c.endswith("Uzaklık"):
+            fmt[c] = lambda v: (tr_num(v, 2) + "%") if pd.notna(v) else "—"
     sty = df.style
     if favorites and "Sembol" in df.columns:
         def _fav_row(row):
@@ -453,10 +455,52 @@ def chart_picker(result_df, days, key):
 # ----------------------------------------------------------------------------
 # Sekmeler
 # ----------------------------------------------------------------------------
-tab1, tab2, tab3, tab_fav, tab_notes, tab4 = st.tabs(
-    ["🔻➡️🔺 Dipten Dönüş", "📊 Hacim / Fiyat", "📋 Tüm Hisseler",
-     "⭐ Favoriler", "📝 Notlar", "🚫 Devre Dışı"]
+(tab_summary, tab1, tab2, tab_52, tab3,
+ tab_fav, tab_notes, tab4) = st.tabs(
+    ["🏠 Özet", "🔻➡️🔺 Dipten Dönüş", "📊 Hacim / Fiyat", "📉 52 Hafta",
+     "📋 Tüm Hisseler", "⭐ Favoriler", "📝 Notlar", "🚫 Devre Dışı"]
 )
+
+
+# --- Özet (Günün özeti / dashboard) ---
+with tab_summary:
+    st.subheader("🏠 Günün özeti")
+    if close_df.empty:
+        st.info("Veri yok. Kenar çubuğundan güncelleyin.")
+    else:
+        favs_s = set(cache.get_favorites())
+        d = close_df.dropna(subset=["fark"])
+        mc = st.columns(3)
+        mc[0].metric("📈 Yükselen", int((d["fark"] > 0).sum()))
+        mc[1].metric("📉 Düşen", int((d["fark"] < 0).sum()))
+        mc[2].metric("Toplam hisse", len(close_df))
+
+        def _disp(sub, pairs):
+            x = sub[[s for s, _ in pairs]].copy()
+            x.columns = [n for _, n in pairs]
+            return x
+
+        ca, cb = st.columns(2)
+        with ca:
+            st.markdown("**📈 En çok artanlar**")
+            top = _disp(d.nlargest(12, "fark"),
+                        [("symbol", "Sembol"), ("son", "Son"), ("fark", "Fark %")])
+            st.dataframe(style_results(top, favorites=favs_s),
+                         width="stretch", hide_index=True)
+        with cb:
+            st.markdown("**📉 En çok azalanlar**")
+            bot = _disp(d.nsmallest(12, "fark"),
+                        [("symbol", "Sembol"), ("son", "Son"), ("fark", "Fark %")])
+            st.dataframe(style_results(bot, favorites=favs_s),
+                         width="stretch", hide_index=True)
+
+        st.markdown("**🔥 Hacme göre en hareketliler**")
+        vol = _disp(d.nlargest(15, "hacim_tl"),
+                    [("symbol", "Sembol"), ("ad", "Ad"), ("son", "Son"),
+                     ("fark", "Fark %"), ("hacim_tl", "Hacim (TL)")])
+        st.dataframe(style_results(vol, favorites=favs_s),
+                     width="stretch", hide_index=True)
+        st.caption(f"Son kesin kapanış: {tr_date(gmax)}")
 
 data = load_data(_data_version())
 
@@ -527,6 +571,32 @@ with tab2:
         if not res2_show.empty:
             chart_picker(res2_show, 90, "t2")
             row_actions(res2_show, "t2")
+
+
+# --- 52 Hafta dip/zirve ---
+with tab_52:
+    st.subheader("52 hafta dip/zirve yakınlığı")
+    cma, cmb = st.columns([2, 2])
+    with cma:
+        mode_lbl = st.radio("Hangisi?", ["📉 Dibe yakın", "📈 Zirveye yakın"],
+                            horizontal=True)
+    with cmb:
+        thr = st.slider("Uzaklık eşiği (%)", 1, 30, 10)
+    mode = "dip" if "Dibe" in mode_lbl else "zirve"
+
+    if not data:
+        st.info("Önce kenar çubuğundan veriyi indirin.")
+    else:
+        r52 = hafta52.run(data, mode=mode, threshold=float(thr),
+                          snapshot=son_map, fark=fark_map)
+        nere = "yıllık dibe" if mode == "dip" else "yıllık zirveye"
+        st.markdown(f"**{len(r52)} hisse** — {nere} %{thr} ve daha yakın.")
+        q52 = st.text_input("Hisse ara", key="q_52").strip().upper()
+        r52_show = r52[r52["Sembol"].str.contains(q52)] if q52 else r52
+        render_table(r52_show, "t52")
+        if not r52_show.empty:
+            chart_picker(r52_show, 252, "t52")
+            row_actions(r52_show, "t52")
 
 
 # --- Tab 3: Tüm Hisseler (son kapanış) ---
