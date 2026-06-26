@@ -13,6 +13,7 @@ import streamlit as st
 
 import settings as cfg
 from data import cache, universe, fetch, store
+from ml_signals import predict as ml_predict
 from screeners import base, dip_donus, hacim_fiyat, hafta52, mevsim, sessizlik
 
 st.set_page_config(page_title="BİST Hisse Tarama", page_icon="📈", layout="wide")
@@ -281,6 +282,8 @@ def style_results(df, favorites=None):
             fmt[c] = lambda v: tr_num(v, 2)
         elif c in ("Hacim/20G Ort", "Hacim Patlaması"):
             fmt[c] = lambda v: (tr_num(v, 2) + "×") if pd.notna(v) else "—"
+        elif c in ("ML Puanı", "5G Skor", "10G Skor"):
+            fmt[c] = lambda v: tr_num(v, 1) if pd.notna(v) else "—"
         elif c == "İsabet":   # pozitif yıl oranı (%) - tek sayı, +/- renklendirmesiz
             fmt[c] = lambda v: ("%" + tr_num(v, 0)) if pd.notna(v) else "—"
         elif c.endswith("Uzaklık"):
@@ -506,10 +509,10 @@ def _row_detail(sym, key, chart_days):
 # ----------------------------------------------------------------------------
 # Sekmeler
 # ----------------------------------------------------------------------------
-(tab_summary, tab1, tab2, tab_52, tab_mevsim, tab_hareketlenme, tab3,
+(tab_summary, tab1, tab2, tab_52, tab_mevsim, tab_hareketlenme, tab_ml, tab3,
  tab_fav, tab_notes, tab4) = st.tabs(
     ["🏠 Özet", "🔻➡️🔺 Dipten Dönüş", "📊 Hacim / Fiyat", "📉 52 Hafta",
-     "📅 Mevsimsellik", "⚡ Hareketlenme", "📋 Tüm Hisseler",
+     "📅 Mevsimsellik", "⚡ Hareketlenme", "🧠 ML Sinyal", "📋 Tüm Hisseler",
      "⭐ Favoriler", "📝 Notlar", "🚫 Devre Dışı"]
 )
 
@@ -767,6 +770,37 @@ with tab_hareketlenme:
         q_har = st.text_input("Hisse ara", key="q_har").strip().upper()
         res_har_show = res_har[res_har["Sembol"].str.contains(q_har)] if q_har else res_har
         render_table(res_har_show, "thar", chart_days=90)
+
+
+# --- ML Sinyal ---
+with tab_ml:
+    st.subheader("🧠 ML Sinyal")
+    st.caption(
+        "Bu sekme **al/sat tavsiyesi değildir**. Yalnızca geçmiş fiyat, düzeltilmiş "
+        "kapanış ve TL ciro verilerinden üretilmiş, backtest kabul kriterini geçmiş "
+        "model varsa sinyal puanı gösterir."
+    )
+    if not data:
+        st.info("Önce kenar çubuğundan veriyi indirin.")
+    else:
+        ml_res, ml_err = ml_predict.score_latest(data, snapshot=son_map, fark=fark_map)
+        if ml_err:
+            st.info(ml_err)
+            st.code("python -m ml_signals.train")
+            st.caption(
+                "Eğitim komutu zaman sıralı backtest yapar. Model, üst 20 seçiminin "
+                "10 iş günlük göreli getirisi pozitifse ve en az bir basit baz çizgiyi "
+                "geçerse kaydedilir."
+            )
+        else:
+            st.markdown(f"**{len(ml_res)} hisse** skorlandı — en yüksek ML puanı üstte.")
+            st.caption(
+                "ML Puanı = 5G ve 10G üst-%30 göreli güç olasılıklarının ortalaması "
+                "(0-100). Güven, skorun 50 eşiğinden uzaklığına göre hesaplanır."
+            )
+            q_ml = st.text_input("Hisse ara", key="q_ml").strip().upper()
+            ml_show = ml_res[ml_res["Sembol"].str.contains(q_ml)] if q_ml else ml_res
+            render_table(ml_show, "tml", chart_days=126, height=520)
 
 
 # --- Tab 3: Tüm Hisseler (son kapanış) ---

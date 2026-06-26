@@ -1,0 +1,150 @@
+{
+  "folds": [
+    {
+      "fold": 1,
+      "train_start": "2024-07-24",
+      "train_end": "2025-07-25",
+      "test_start": "2025-07-28",
+      "test_end": "2025-10-22",
+      "rows_train": 144982,
+      "rows_test": 36954,
+      "auc_5": 0.5511073634243541,
+      "auc_10": 0.5371763214601376,
+      "ap_5": 0.3469713749316533,
+      "ap_10": 0.3329869466675926,
+      "top20_rel_fwd_ret_10": 2.3273909699980413
+    },
+    {
+      "fold": 2,
+      "train_start": "2024-07-24",
+      "train_end": "2025-10-07",
+      "test_start": "2025-10-08",
+      "test_end": "2026-01-06",
+      "rows_train": 175462,
+      "rows_test": 37085,
+      "auc_5": 0.5696705157658251,
+      "auc_10": 0.5648935346266286,
+      "ap_5": 0.3650339113165747,
+      "ap_10": 0.35911214971360433,
+      "top20_rel_fwd_ret_10": 3.316859369038652
+    },
+    {
+      "fold": 3,
+      "train_start": "2024-07-24",
+      "train_end": "2025-12-19",
+      "test_start": "2025-12-22",
+      "test_end": "2026-03-19",
+      "rows_train": 206046,
+      "rows_test": 37253,
+      "auc_5": 0.5699409216623896,
+      "auc_10": 0.5759203615969063,
+      "ap_5": 0.3631179231657408,
+      "ap_10": 0.36784965421577587,
+      "top20_rel_fwd_ret_10": 3.417207595562611
+    },
+    {
+      "fold": 4,
+      "train_start": "2024-07-24",
+      "train_end": "2026-03-05",
+      "test_start": "2026-03-06",
+      "test_end": "2026-06-11",
+      "rows_train": 237389,
+      "rows_test": 37285,
+      "auc_5": 0.5771191860292606,
+      "auc_10": 0.5690804813193261,
+      "ap_5": 0.37101814006476114,
+      "ap_10": 0.36681645335543606,
+      "top20_rel_fwd_ret_10": 5.233933569800365
+    }
+  ],
+  "summary": {
+    "passed": true,
+    "top20_rel_fwd_ret_10": 3.7127484472614305,
+    "baseline_top20_rel_fwd_ret_10": {
+      "momentum": 2.514256148730658,
+      "volume": -1.5280284019541472,
+      "squeeze": -1.4553896171893428
+    },
+    "beat_baseline_count": 3,
+    "reason": null
+  },
+  "data": {
+    "rows": 274674,
+    "symbols": 594,
+    "start": "2024-07-24",
+    "end": "2026-06-11",
+    "features": [
+      "ret_1",
+      "ret_3",
+      "ret_5",
+      "ret_10",
+      "ret_20",
+      "ret_60",
+      "vol_ratio_2_20",
+      "vol_ratio_5_20",
+      "vol_ratio_10_20",
+      "volatility_10",
+      "volatility_20",
+      "volatility_60",
+      "volatility_ratio_20_60",
+      "sma20_gap",
+      "sma50_gap",
+      "sma20_slope_5",
+      "drawdown_60",
+      "drawdown_252",
+      "low_distance_60",
+      "turnover_z20"
+    ]
+  },
+  "feature_importance": [
+    {
+      "feature": "low_distance_60",
+      "importance": 0.021866
+    },
+    {
+      "feature": "volatility_60",
+      "importance": 0.017606
+    },
+    {
+      "feature": "volatility_ratio_20_60",
+      "importance": 0.015234
+    },
+    {
+      "feature": "vol_ratio_5_20",
+      "importance": 0.015122
+    },
+    {
+      "feature": "sma20_slope_5",
+      "importance": 0.013447
+    },
+    {
+      "feature": "ret_60",
+      "importance": 0.013226
+    },
+    {
+      "feature": "vol_ratio_10_20",
+      "importance": 0.012288
+    },
+    {
+      "feature": "drawdown_60",
+      "importance": 0.011729
+    },
+    {
+      "feature": "drawdown_252",
+      "importance": 0.011301
+    },
+    {
+      "feature": "volatility_20",
+      "importance": 0.009672
+    },
+    {
+      "feature": "sma50_gap",
+      "importance": 0.009305
+    },
+    {
+      "feature": "volatility_10",
+      "importance": 0.008554
+    }
+  ],
+  "model_path": "C:\\Users\\asus\\OneDrive\\Masaüstü\\Şahin\\hisse-takip\\ml_signals\\model.joblib"
+}
