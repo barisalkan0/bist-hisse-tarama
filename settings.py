@@ -58,3 +58,9 @@ SMA_LONG = 50
 # Veri "bayat" sayilma esigi (IS GUNU) - bundan fazla geride ise uyari gosterilir.
 # Is gunu bazli oldugu icin hafta sonu/tatil yanlis uyari vermez.
 STALE_DAYS = 3
+
+# --- Sessizlik Sonrasi Hareketlenme taramasi varsayilan esikleri ---
+MIN_CIRO = 10_000_000        # Sakin donem ort TL ciro (illikit elensin)
+MAX_CONTRACTION = 0.85       # Sakin/baz volatilite orani (kucuk = sikisma)
+MAX_DRIFT = 10.0             # Sakin pencere net getiri mutlak degeri (%)
+MIN_SPIKE = 2.5              # Son 2 gun / sakin baz hacim oran esigi (x)

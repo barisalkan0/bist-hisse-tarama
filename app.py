@@ -13,7 +13,7 @@ import streamlit as st
 
 import settings as cfg
 from data import cache, universe, fetch, store
-from screeners import base, dip_donus, hacim_fiyat, hafta52, mevsim
+from screeners import base, dip_donus, hacim_fiyat, hafta52, mevsim, sessizlik
 
 st.set_page_config(page_title="BİST Hisse Tarama", page_icon="📈", layout="wide")
 
@@ -277,9 +277,9 @@ def style_results(df, favorites=None):
     for c in df.columns:
         if c in pct_cols:
             fmt[c] = tr_pct
-        elif c in ("Son", "Hacim (Lot)", "Hacim (TL)"):
+        elif c in ("Son", "Hacim (Lot)", "Hacim (TL)", "20G Ciro (TL)", "Sıkışma"):
             fmt[c] = lambda v: tr_num(v, 2)
-        elif c == "Hacim/20G Ort":
+        elif c in ("Hacim/20G Ort", "Hacim Patlaması"):
             fmt[c] = lambda v: (tr_num(v, 2) + "×") if pd.notna(v) else "—"
         elif c == "İsabet":   # pozitif yıl oranı (%) - tek sayı, +/- renklendirmesiz
             fmt[c] = lambda v: ("%" + tr_num(v, 0)) if pd.notna(v) else "—"
@@ -506,10 +506,11 @@ def _row_detail(sym, key, chart_days):
 # ----------------------------------------------------------------------------
 # Sekmeler
 # ----------------------------------------------------------------------------
-(tab_summary, tab1, tab2, tab_52, tab_mevsim, tab3,
+(tab_summary, tab1, tab2, tab_52, tab_mevsim, tab_hareketlenme, tab3,
  tab_fav, tab_notes, tab4) = st.tabs(
     ["🏠 Özet", "🔻➡️🔺 Dipten Dönüş", "📊 Hacim / Fiyat", "📉 52 Hafta",
-     "📅 Mevsimsellik", "📋 Tüm Hisseler", "⭐ Favoriler", "📝 Notlar", "🚫 Devre Dışı"]
+     "📅 Mevsimsellik", "⚡ Hareketlenme", "📋 Tüm Hisseler",
+     "⭐ Favoriler", "📝 Notlar", "🚫 Devre Dışı"]
 )
 
 
@@ -726,6 +727,46 @@ with tab_mevsim:
             qm = st.text_input("Hisse ara", key="q_mevsim").strip().upper()
             res_show = res[res["Sembol"].str.contains(qm)] if qm else res
             render_table(res_show, "tmevsim", chart_days=252)
+
+
+# --- Sessizlik Sonrası Hareketlenme ---
+with tab_hareketlenme:
+    st.subheader("⚡ Sessizlik Sonrası Hareketlenme")
+    st.caption(
+        "⚠️ **Kurulum (sakin + hacim patlaması) yakalanır; YÖN tahmin DEĞİLDİR.** "
+        "'Fark %' yalnızca bugünkü yön bilgisidir; tek başına al/sat sinyali değildir. "
+        "Sakin bantta giderken son 2 günde hacmi patlayan likit hisseler listelenir."
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        min_ciro_m = st.slider("Min ciro (Milyon TL)", 1, 100,
+                               int(cfg.MIN_CIRO / 1_000_000))
+    with c2:
+        min_spike_ui = st.slider("Min hacim katı (×)", 1.0, 8.0,
+                                 float(cfg.MIN_SPIKE), 0.1)
+    with c3:
+        max_contr_ui = st.slider("Max sıkışma", 0.50, 1.00,
+                                 float(cfg.MAX_CONTRACTION), 0.01)
+    with c4:
+        max_drift_ui = st.slider("Max sapma %", 2.0, 30.0,
+                                 float(cfg.MAX_DRIFT), 0.5)
+
+    if not data:
+        st.info("Önce kenar çubuğundan veriyi indirin.")
+    else:
+        res_har = sessizlik.run(
+            data,
+            min_ciro=min_ciro_m * 1_000_000,
+            max_contraction=max_contr_ui,
+            max_drift=max_drift_ui,
+            min_spike=min_spike_ui,
+            snapshot=son_map,
+            fark=fark_map,
+        )
+        st.markdown(f"**{len(res_har)} hisse** bulundu — sakin bant + hacim patlaması.")
+        q_har = st.text_input("Hisse ara", key="q_har").strip().upper()
+        res_har_show = res_har[res_har["Sembol"].str.contains(q_har)] if q_har else res_har
+        render_table(res_har_show, "thar", chart_days=90)
 
 
 # --- Tab 3: Tüm Hisseler (son kapanış) ---

@@ -71,6 +71,53 @@ def turnover_ratio(df, window):
     return recent / base
 
 
+def volatility_contraction(close, calm=25, base=90, gap=2):
+    """
+    Sakin donem vs baz donem volatilite sikismasi (kapanislardan).
+    Donemler CAKISMIYOR: son `gap` gun patlama icin ayrilmis, oncesi sakin/baz.
+    Returns (vol_calm, vol_base, contraction) or None.
+    """
+    if len(close) < base + gap + 2:
+        return None
+    r = close.pct_change()
+    vc = float(r.iloc[-(calm + gap):-gap].std())
+    vb = float(r.iloc[-(base + gap):-gap].std())
+    if vb == 0 or pd.isna(vb) or pd.isna(vc):
+        return None
+    return vc, vb, vc / vb
+
+
+def recent_drift(close, window=25, gap=2):
+    """
+    Sakin penceredeki net fiyat sapması (%).
+    drift = (close[-(gap+1)] / close[-(window+gap+1)] - 1) * 100.
+    Yetersiz veri -> None.
+    """
+    if len(close) < window + gap + 2:
+        return None
+    a = float(close.iloc[-(window + gap + 1)])
+    b = float(close.iloc[-(gap + 1)])
+    if a == 0 or pd.isna(a) or pd.isna(b):
+        return None
+    return (b / a - 1.0) * 100.0
+
+
+def volume_spike(vol, recent=2, calm=25, gap=2):
+    """
+    Son `recent` gun ort ciro / sakin donem (calm gun, gap once) ort ciro orani.
+    Donemler CAKISMIYOR (gap=2: son 2 gun spike, onceki 25 gun sakin baz).
+    Returns (tbase, spike) or None.
+    """
+    if len(vol) < calm + gap + 1:
+        return None
+    calm_slice = vol.iloc[-(calm + gap):-gap] if gap > 0 else vol.iloc[-calm:]
+    tbase = float(calm_slice.mean())
+    if tbase == 0 or pd.isna(tbase):
+        return None
+    spike = float(vol.iloc[-recent:].mean()) / tbase
+    return tbase, spike
+
+
 def date_str(df, offset=0):
     """offset=0 son tarih, offset=N -> N gun oncesi tarihi (YYYY-MM-DD)."""
     idx = -1 - offset
