@@ -1206,30 +1206,48 @@ with tab_ml:
                 st.caption(f"{tr_date(data_date)} kapanışı daha önce işlendi; aynı gün ikinci radar kaydı yazılmadı.")
 
             counts = radar_df["Radar Durumu"].value_counts()
+            strong_count = int(counts.get("Güçlü Aday", 0))
+            watch_count = int(counts.get("Takip Edilecek", 0))
+            risky_count = int(counts.get("Riskli Ama Hareketli", 0))
+            own_count = int(len(set(favs_now) & set(radar_df["Hisse"])))
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Güçlü aday", int(counts.get("Güçlü Aday", 0)))
-            m2.metric("Takip edilecek", int(counts.get("Takip Edilecek", 0)))
-            m3.metric("Riskli ama hareketli", int(counts.get("Riskli Ama Hareketli", 0)))
-            m4.metric("Kendi takibim", int(len(set(favs_now) & set(radar_df["Hisse"]))))
+            m1.metric("Bugün güçlü sinyal", strong_count)
+            m2.metric("Teyit bekleyen", watch_count)
+            m3.metric("Hareketli / riskli", risky_count)
+            m4.metric("Kendi takibim", own_count)
             st.caption(
                 "Yükseliş Puanı 0-100 arasıdır. 50 civarı zayıf, 60 üstü izlemeye değer, "
                 "70 üstü daha güçlü sinyal sayılır. Göreli Güç destekleyici filtredir."
             )
+            if strong_count == 0:
+                st.info(
+                    "Bugün güçlü sinyal yoksa bu normaldir. Sistem zayıf günü zorla aday üretmez; "
+                    "yalnızca takip etmeye değer hisseleri ayrı gösterir."
+                )
             with st.expander("Liste anlamları", expanded=False):
                 st.markdown(
-                    "- **Güçlü Aday:** Yükseliş puanı ve göreli güç birlikte olumlu; bugün detaylı bakılır.\n"
-                    "- **Takip Edilecek:** Sinyal var ama teyit bekler; 3-5 iş günü puan/grafik izlenir.\n"
-                    "- **Riskli Ama Hareketli:** Hareket var ama oynaklık veya hızlı yükseliş riski yüksek.\n"
+                    "- **Bugün Güçlü Sinyal:** Yükseliş puanı, göreli güç, veri geçmişi ve likidite birlikte olumlu; bugün detaylı incelenir.\n"
+                    "- **Teyit Bekleyenler:** Yükseliş ihtimali var ama göreli güç, hacim veya trend tarafında teyit eksik; 3-5 iş günü puan/grafik izlenir.\n"
+                    "- **Hareketli / Riskli:** Hissede hareket var ama oynaklık, zayıf teyit veya hızlı yükseliş riski yüksek; acele edilmez.\n"
                     "- **Kendi Takibim:** Senin eklediğin hisseler; radara girmese bile sonucu kayda alınır.\n"
                     "- **Sonuçlar:** Süresi dolan sinyallerin 5/10 iş günü sonra gerçekten tutup tutmadığını gösterir."
                 )
 
-            view = st.pills(
+            view_label_map = {
+                "Radar Listesi": "Tümü",
+                "Bugün Güçlü Sinyal": "Güçlü Aday",
+                "Teyit Bekleyenler": "Takip Edilecek",
+                "Hareketli / Riskli": "Riskli Ama Hareketli",
+                "Kendi Takibim": "Kendi Takibim",
+                "Sonuçlar": "Sonuçlar",
+            }
+            selected_label = st.pills(
                 "Liste",
-                ["Tümü", "Güçlü Aday", "Takip Edilecek", "Riskli Ama Hareketli", "Kendi Takibim", "Sonuçlar"],
-                default="Tümü",
+                list(view_label_map.keys()),
+                default="Radar Listesi",
                 selection_mode="single",
-            ) or "Tümü"
+            ) or "Radar Listesi"
+            view = view_label_map[selected_label]
             if view == "Sonuçlar":
                 outcomes = ml_daily.load_outcomes()
                 render_outcomes_panel(outcomes)
@@ -1242,8 +1260,15 @@ with tab_ml:
                 q_ml = st.text_input("Hisse ara", key="q_ml").strip().upper()
                 if q_ml:
                     show = show[show["Hisse"].str.contains(q_ml)]
-                st.markdown(f"**{len(show)} aday** gösteriliyor. Satıra tıkla → açıklama ve grafik.")
-                render_radar_table(show, "tml")
+                display_show = show.copy()
+                if "Radar Durumu" in display_show.columns:
+                    display_show["Radar Durumu"] = display_show["Radar Durumu"].replace({
+                        "Güçlü Aday": "Bugün Güçlü Sinyal",
+                        "Takip Edilecek": "Teyit Bekleyen",
+                        "Riskli Ama Hareketli": "Hareketli / Riskli",
+                    })
+                st.markdown(f"**{len(display_show)} aday** gösteriliyor. Satıra tıkla → açıklama ve grafik.")
+                render_radar_table(display_show, "tml")
 
 
 # --- Tab 3: Tüm Hisseler (son kapanış) ---
