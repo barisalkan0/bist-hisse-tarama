@@ -1,8 +1,7 @@
 """ML egitim etiketleri.
 
-Etiketler, her tarih icinde ileri performansa gore capraz-kesit siralamasi
-yapar. Bu sayede model mutlak piyasa yonunden cok, hisseler arasi goreli gucu
-ogrenmeye calisir.
+Ana hedef, hissenin 5/10 is gunu sonra belirlenen mutlak yukselis esigini
+gecip gecmedigidir. Goreli guc etiketleri yardimci model olarak tutulur.
 """
 from __future__ import annotations
 
@@ -11,6 +10,8 @@ import pandas as pd
 
 TOP_QUANTILE = 0.70
 MIN_SYMBOLS_PER_DATE = 30
+UP_THRESHOLD_5 = 2.0
+UP_THRESHOLD_10 = 3.0
 
 
 def forward_returns_for_symbol(symbol: str, df: pd.DataFrame) -> pd.DataFrame:
@@ -29,7 +30,10 @@ def build_label_frame(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
     frames = [forward_returns_for_symbol(sym, df) for sym, df in data.items()]
     frames = [f for f in frames if not f.empty]
     if not frames:
-        return pd.DataFrame(columns=["symbol", "date", "fwd_ret_5", "fwd_ret_10", "y_5", "y_10"])
+        return pd.DataFrame(columns=[
+            "symbol", "date", "fwd_ret_5", "fwd_ret_10", "rel_fwd_ret_10",
+            "y_5", "y_10", "y_up_5", "y_up_10",
+        ])
 
     out = pd.concat(frames, ignore_index=True)
     out["date"] = pd.to_datetime(out["date"])
@@ -39,9 +43,11 @@ def build_label_frame(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
         ret_col = f"fwd_ret_{horizon}"
         rank_col = f"rank_{horizon}"
         y_col = f"y_{horizon}"
+        threshold = UP_THRESHOLD_5 if horizon == 5 else UP_THRESHOLD_10
         out[rank_col] = out.groupby("date")[ret_col].rank(pct=True, method="average")
         counts = out.groupby("date")[ret_col].transform("count")
         out[y_col] = (out[rank_col] >= TOP_QUANTILE).astype(int)
+        out[f"y_up_{horizon}"] = (out[ret_col] >= threshold).astype(int)
 
     enough_symbols = out.groupby("date")["symbol"].transform("count") >= MIN_SYMBOLS_PER_DATE
     out = out[enough_symbols].copy()
@@ -54,6 +60,9 @@ def build_label_frame(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
 def build_training_frame(features: pd.DataFrame, labels: pd.DataFrame) -> pd.DataFrame:
     if features.empty or labels.empty:
         return pd.DataFrame()
-    cols = ["symbol", "date", "fwd_ret_5", "fwd_ret_10", "rel_fwd_ret_10", "y_5", "y_10"]
+    cols = [
+        "symbol", "date", "fwd_ret_5", "fwd_ret_10", "rel_fwd_ret_10",
+        "y_5", "y_10", "y_up_5", "y_up_10",
+    ]
     merged = features.merge(labels[cols], on=["symbol", "date"], how="inner")
     return merged.sort_values(["date", "symbol"]).reset_index(drop=True)

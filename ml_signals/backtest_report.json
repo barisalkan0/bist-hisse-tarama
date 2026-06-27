@@ -2,77 +2,91 @@
   "folds": [
     {
       "fold": 1,
-      "train_start": "2024-07-24",
-      "train_end": "2025-07-25",
-      "test_start": "2025-07-28",
-      "test_end": "2025-10-22",
-      "rows_train": 144982,
-      "rows_test": 36954,
-      "auc_5": 0.5511073634243541,
-      "auc_10": 0.5371763214601376,
-      "ap_5": 0.3469713749316533,
-      "ap_10": 0.3329869466675926,
-      "top20_rel_fwd_ret_10": 2.3273909699980413
+      "train_start": "2011-07-25",
+      "train_end": "2012-07-20",
+      "test_start": "2012-07-23",
+      "test_end": "2012-10-22",
+      "rows_train": 72305,
+      "rows_test": 19485,
+      "auc_up_5": 0.6250368344412719,
+      "auc_up_10": 0.631263279264612,
+      "ap_up_5": 0.3029636136931527,
+      "ap_up_10": 0.29798504668312364,
+      "auc_rel_5": 0.5963653601873377,
+      "auc_rel_10": 0.6160974662408106,
+      "top20_abs_fwd_ret_10": 0.7238324004397988,
+      "top20_rel_fwd_ret_10": 1.8785696426603296
     },
     {
       "fold": 2,
-      "train_start": "2024-07-24",
-      "train_end": "2025-10-07",
-      "test_start": "2025-10-08",
-      "test_end": "2026-01-06",
-      "rows_train": 175462,
-      "rows_test": 37085,
-      "auc_5": 0.5696705157658251,
-      "auc_10": 0.5648935346266286,
-      "ap_5": 0.3650339113165747,
-      "ap_10": 0.35911214971360433,
-      "top20_rel_fwd_ret_10": 3.316859369038652
+      "train_start": "2011-07-25",
+      "train_end": "2017-02-01",
+      "test_start": "2017-02-02",
+      "test_end": "2017-05-02",
+      "rows_train": 463810,
+      "rows_test": 22926,
+      "auc_up_5": 0.5503834236703362,
+      "auc_up_10": 0.5273688584892661,
+      "ap_up_5": 0.32745897892916775,
+      "ap_up_10": 0.31636575876434136,
+      "auc_rel_5": 0.5778087101007643,
+      "auc_rel_10": 0.5871127819854218,
+      "top20_abs_fwd_ret_10": 2.410932859520591,
+      "top20_rel_fwd_ret_10": 2.0361070071770544
     },
     {
       "fold": 3,
-      "train_start": "2024-07-24",
-      "train_end": "2025-12-19",
-      "test_start": "2025-12-22",
-      "test_end": "2026-03-19",
-      "rows_train": 206046,
-      "rows_test": 37253,
-      "auc_5": 0.5699409216623896,
-      "auc_10": 0.5759203615969063,
-      "ap_5": 0.3631179231657408,
-      "ap_10": 0.36784965421577587,
-      "top20_rel_fwd_ret_10": 3.417207595562611
+      "train_start": "2011-07-25",
+      "train_end": "2021-08-23",
+      "test_start": "2021-08-24",
+      "test_end": "2021-11-22",
+      "rows_train": 895301,
+      "rows_test": 26711,
+      "auc_up_5": 0.5400244839395647,
+      "auc_up_10": 0.5096259657436653,
+      "ap_up_5": 0.35890835902350976,
+      "ap_up_10": 0.3633930193826534,
+      "auc_rel_5": 0.5724351628544097,
+      "auc_rel_10": 0.5466481518655161,
+      "top20_abs_fwd_ret_10": 1.0351249172096473,
+      "top20_rel_fwd_ret_10": 1.2391272174987473
     },
     {
       "fold": 4,
-      "train_start": "2024-07-24",
-      "train_end": "2026-03-05",
-      "test_start": "2026-03-06",
-      "test_end": "2026-06-11",
-      "rows_train": 237389,
-      "rows_test": 37285,
-      "auc_5": 0.5771191860292606,
-      "auc_10": 0.5690804813193261,
-      "ap_5": 0.37101814006476114,
-      "ap_10": 0.36681645335543606,
-      "top20_rel_fwd_ret_10": 5.233933569800365
+      "train_start": "2011-07-25",
+      "train_end": "2026-03-06",
+      "test_start": "2026-03-09",
+      "test_end": "2026-06-12",
+      "rows_train": 1487843,
+      "rows_test": 37286,
+      "auc_up_5": 0.5396468618903212,
+      "auc_up_10": 0.5284291302384545,
+      "ap_up_5": 0.42843139003299313,
+      "ap_up_10": 0.4147875659731557,
+      "auc_rel_5": 0.5788771728031166,
+      "auc_rel_10": 0.5658381254738943,
+      "top20_abs_fwd_ret_10": 5.021161685271473,
+      "top20_rel_fwd_ret_10": 4.6617268876801905
     }
   ],
   "summary": {
     "passed": true,
-    "top20_rel_fwd_ret_10": 3.7127484472614305,
-    "baseline_top20_rel_fwd_ret_10": {
-      "momentum": 2.514256148730658,
-      "volume": -1.5280284019541472,
-      "squeeze": -1.4553896171893428
+    "target": "absolute_upside",
+    "top20_abs_fwd_ret_10": 2.297762965610378,
+    "top20_rel_fwd_ret_10": 0.7891599612544691,
+    "baseline_top20_abs_fwd_ret_10": {
+      "momentum": 3.5454338460677426,
+      "volume": 0.4545118155866432,
+      "squeeze": 0.8013086155039056
     },
-    "beat_baseline_count": 3,
+    "beat_baseline_count": 2,
     "reason": null
   },
   "data": {
-    "rows": 274674,
+    "rows": 1525129,
     "symbols": 594,
-    "start": "2024-07-24",
-    "end": "2026-06-11",
+    "start": "2011-07-25",
+    "end": "2026-06-12",
     "features": [
       "ret_1",
       "ret_3",
@@ -93,57 +107,68 @@
       "drawdown_60",
       "drawdown_252",
       "low_distance_60",
-      "turnover_z20"
+      "turnover_z20",
+      "history_days",
+      "history_years",
+      "turnover_ma20",
+      "turnover_ma20_log",
+      "turnover_ma60_log",
+      "turnover_stability_20_60",
+      "price_range_20",
+      "quiet_volume_pressure",
+      "seasonality_mean",
+      "seasonality_hit",
+      "seasonality_years"
     ]
   },
   "feature_importance": [
     {
       "feature": "low_distance_60",
-      "importance": 0.021866
+      "importance": 0.014483
     },
     {
-      "feature": "volatility_60",
-      "importance": 0.017606
+      "feature": "seasonality_years",
+      "importance": 0.01392
     },
     {
       "feature": "volatility_ratio_20_60",
-      "importance": 0.015234
+      "importance": 0.007827
     },
     {
-      "feature": "vol_ratio_5_20",
-      "importance": 0.015122
+      "feature": "volatility_60",
+      "importance": 0.006772
+    },
+    {
+      "feature": "turnover_ma60_log",
+      "importance": 0.006185
+    },
+    {
+      "feature": "seasonality_mean",
+      "importance": 0.005427
+    },
+    {
+      "feature": "turnover_stability_20_60",
+      "importance": 0.005081
+    },
+    {
+      "feature": "sma20_gap",
+      "importance": 0.004988
     },
     {
       "feature": "sma20_slope_5",
-      "importance": 0.013447
+      "importance": 0.004122
     },
     {
-      "feature": "ret_60",
-      "importance": 0.013226
+      "feature": "quiet_volume_pressure",
+      "importance": 0.003201
     },
     {
-      "feature": "vol_ratio_10_20",
-      "importance": 0.012288
+      "feature": "price_range_20",
+      "importance": 0.002899
     },
     {
-      "feature": "drawdown_60",
-      "importance": 0.011729
-    },
-    {
-      "feature": "drawdown_252",
-      "importance": 0.011301
-    },
-    {
-      "feature": "volatility_20",
-      "importance": 0.009672
-    },
-    {
-      "feature": "sma50_gap",
-      "importance": 0.009305
-    },
-    {
-      "feature": "volatility_10",
-      "importance": 0.008554
+      "feature": "ret_20",
+      "importance": 0.00273
     }
   ],
   "model_path": "C:\\Users\\asus\\OneDrive\\Masaüstü\\Şahin\\hisse-takip\\ml_signals\\model.joblib"

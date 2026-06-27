@@ -5,7 +5,7 @@ NEDEN İş Yatırım (Yahoo değil): Yahoo, BİST hisselerinde bedelsiz/bölünm
 DÜZELTMİYOR (close == adj_close), bu yüzden bedelsiz günlerinde sahte ~%75 "çöküş"ler
 ve işlem-durması sonrası sahte sıçramalar (ör. KGYO Temmuz +%1015) oluşuyordu; bu hem
 dipten-dönüş taramasını hem mevsimselliği bozuyordu. İş Yatırım'ın `HGDG_KAPANIS` alanı
-BİST-uyumlu DÜZELTİLMİŞ kapanıştır (mynet ve babanın aracı kurum ekranıyla birebir),
+BİST-uyumlu DÜZELTİLMİŞ kapanıştır (mynet ve aracı kurum ekranlarıyla uyumlu),
 `HGDG_HACIM` = TL ciro. Doğrulandı: BFREN 06-10-2025 → 169,40 / 69.315.547 (mynet ile aynı).
 
 Tek istek tüm aralığı döndürür (cap yok; 15y ≈ 3,2s). Sembol başına bir HTTP isteği;

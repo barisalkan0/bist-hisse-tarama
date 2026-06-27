@@ -4,7 +4,9 @@ BİST Hisse Tarama — Streamlit arayüzü.
 Çalıştırmak için:  streamlit run app.py   (veya calistir.bat'a çift tıkla)
 """
 import html
+import json
 from datetime import datetime, date
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -13,7 +15,8 @@ import streamlit as st
 
 import settings as cfg
 from data import cache, universe, fetch, store
-from ml_signals import predict as ml_predict
+from ml_signals import daily as ml_daily
+from ml_signals import radar as ml_radar
 from screeners import base, dip_donus, hacim_fiyat, hafta52, mevsim, sessizlik
 
 st.set_page_config(page_title="BİST Hisse Tarama", page_icon="📈", layout="wide")
@@ -98,16 +101,42 @@ TR_AY_TAM = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz",
 
 def tr_num(x, dec=2):
     """Türkçe sayı biçimi: binlik '.', ondalık ',' -> 96.110.687,00"""
-    if x is None or pd.isna(x):
-        return "—"
-    s = f"{x:,.{dec}f}"
+    val = _as_number(x)
+    if val is None:
+        if x is None or pd.isna(x):
+            return "—"
+        return str(x)
+    s = f"{val:,.{dec}f}"
     return s.translate(str.maketrans({",": ".", ".": ","}))
 
 
-def tr_pct(x):
+def _as_number(x):
     if x is None or pd.isna(x):
-        return "—"
-    return f"{x:+.2f}".replace(".", ",")
+        return None
+    if isinstance(x, str):
+        txt = x.strip()
+        if not txt or txt == "—":
+            return None
+        if any(ch.isalpha() for ch in txt):
+            return None
+        txt = txt.replace("%", "").replace("×", "").replace(" ", "")
+        if "," in txt:
+            txt = txt.replace(".", "").replace(",", ".")
+    else:
+        txt = x
+    try:
+        return float(txt)
+    except (TypeError, ValueError):
+        return None
+
+
+def tr_pct(x):
+    val = _as_number(x)
+    if val is None:
+        if x is None or pd.isna(x):
+            return "—"
+        return str(x)
+    return f"{val:+.2f}".replace(".", ",")
 
 
 def tr_date(iso):
@@ -162,6 +191,17 @@ def load_closing(version):
     return cs, son_map, fark_map
 
 
+@st.cache_data(show_spinner=False)
+def load_ml_report(version):
+    path = Path("ml_signals") / "backtest_report.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 def bump_version():
     st.session_state["data_version"] = _data_version() + 1
     load_data.clear()
@@ -189,7 +229,22 @@ def run_price_update(full=False):
     def cb(done, total, sym):
         prog.progress(done / total, text=f"{done}/{total} — {sym}")
 
-    total_rows, errors = fetch.update_all(symbols, names=names, progress_cb=cb)
+    total_rows, errors = fetch.update_all(symbols, names=names, progress_cb=cb, full=full)
+    prog.empty()
+    return total_rows, errors
+
+
+def run_monthly_update():
+    """Mevsimsellik icin uzun aylik gecmisi gunceller."""
+    rows = cache.get_snapshot()
+    symbols = list(rows["symbol"]) if not rows.empty else cache.symbols_in_cache()
+
+    prog = st.progress(0.0, text="Aylık geçmiş indiriliyor...")
+
+    def cb(done, total, sym):
+        prog.progress(done / total, text=f"{done}/{total} — {sym}")
+
+    total_rows, errors = fetch.update_monthly(symbols, progress_cb=cb)
     prog.empty()
     return total_rows, errors
 
@@ -197,7 +252,7 @@ def run_price_update(full=False):
 def maybe_auto_update():
     """
     Açılışta eksik günleri otomatik tamamlar (catch-up). En fazla 30 dakikada bir
-    çalışır; böylece (özellikle bulutta) babam linke her girdiğinde beklemez.
+    çalışır; böylece (özellikle bulutta) kullanıcı linke her girdiğinde beklemez.
     Önbellek boşsa hiçbir şey yapmaz (kullanıcı 'İlk veri indirme'ye basar).
     """
     newest = cache.connect().execute("SELECT MAX(date) FROM prices").fetchone()[0]
@@ -282,8 +337,13 @@ def style_results(df, favorites=None):
             fmt[c] = lambda v: tr_num(v, 2)
         elif c in ("Hacim/20G Ort", "Hacim Patlaması"):
             fmt[c] = lambda v: (tr_num(v, 2) + "×") if pd.notna(v) else "—"
-        elif c in ("ML Puanı", "5G Skor", "10G Skor"):
+        elif c in (
+            "ML Puanı", "Yükseliş Puanı", "Göreli Güç",
+            "5G Skor", "10G Skor", "5G Yükseliş", "10G Yükseliş",
+        ):
             fmt[c] = lambda v: tr_num(v, 1) if pd.notna(v) else "—"
+        elif c in ("Başlangıç", "Sonuç Fiyatı"):
+            fmt[c] = lambda v: tr_num(v, 2) if pd.notna(v) else "—"
         elif c == "İsabet":   # pozitif yıl oranı (%) - tek sayı, +/- renklendirmesiz
             fmt[c] = lambda v: ("%" + tr_num(v, 0)) if pd.notna(v) else "—"
         elif c.endswith("Uzaklık"):
@@ -391,6 +451,24 @@ with st.sidebar:
             bump_version()
             st.success(f"Güncellendi (+{tr} satır).")
             st.rerun()
+        with st.expander("🧠 ML veri bakımı", expanded=False):
+            st.caption(
+                f"Normal güncelleme eksik günleri tamamlar. Uzun geçmiş yenileme, günlük "
+                f"fiyat/ciro verisini yaklaşık {cfg.BACKFILL_YEARS} yıla kadar yeniden çeker; "
+                "model eğitimi için daha sağlam geçmiş sağlar."
+            )
+            if st.button("Uzun geçmişi yenile", width="stretch"):
+                try:
+                    refresh_snapshot()
+                except Exception as e:
+                    st.warning(f"Sembol listesi alınamadı: {e}")
+                tr, errs = run_price_update(full=True)
+                mr, merrs = run_monthly_update()
+                bump_version()
+                st.success(f"Uzun geçmiş yenilendi: günlük +{tr} satır, aylık +{mr} satır.")
+                if errs or merrs:
+                    st.caption(f"{len(errs) + len(merrs)} partide uyarı oldu.")
+                st.rerun()
 
     st.divider()
     _en, _ok, _err = st.session_state.get("store_diag", (False, False, None))
@@ -464,6 +542,283 @@ def price_volume_chart(symbol, days):
     st.plotly_chart(fig, width="stretch")
 
 
+def radar_price_chart(symbol, days=126, signal_date=None):
+    """Akilli Radar detayi icin fiyat + hacim + ana ortalama cizgileri."""
+    df = cache.get_prices(symbol)
+    if df.empty:
+        st.info("Bu hisse için geçmiş veri yok.")
+        return
+    sub = df.iloc[-days:] if days < len(df) else df
+    close = sub["adj_close"].astype(float)
+    vol = sub["volume"].astype(float)
+    vmax = float(vol.max()) or 1.0
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Bar(x=sub.index, y=vol, name="Ciro", marker_color="rgba(79,70,229,0.20)"),
+        secondary_y=True,
+    )
+    fig.add_trace(
+        go.Scatter(x=sub.index, y=close, name="Fiyat", mode="lines",
+                   line=dict(color="#4F46E5", width=2.5)),
+        secondary_y=False,
+    )
+    sma20 = close.rolling(20, min_periods=10).mean()
+    sma50 = close.rolling(50, min_periods=25).mean()
+    fig.add_trace(
+        go.Scatter(x=sub.index, y=sma20, name="20 günlük ortalama", mode="lines",
+                   line=dict(color="#0EA5E9", width=1.6)),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(x=sub.index, y=sma50, name="50 günlük ortalama", mode="lines",
+                   line=dict(color="#F59E0B", width=1.6)),
+        secondary_y=False,
+    )
+    last60 = close.iloc[-60:] if len(close) >= 60 else close
+    if not last60.empty:
+        fig.add_hline(y=float(last60.min()), line_dash="dot", line_color="#DC2626",
+                      annotation_text="60G dip", annotation_position="bottom right")
+        fig.add_hline(y=float(last60.max()), line_dash="dot", line_color="#15803D",
+                      annotation_text="60G zirve", annotation_position="top right")
+    if signal_date:
+        try:
+            sd = pd.to_datetime(signal_date)
+            if sub.index.min() <= sd <= sub.index.max():
+                fig.add_vline(x=sd, line_dash="dash", line_color="#7C3AED",
+                              annotation_text="Radar", annotation_position="top")
+        except Exception:
+            pass
+    fig.update_layout(
+        template="plotly_white",
+        height=430,
+        margin=dict(l=10, r=10, t=52, b=80),
+        title=dict(text=f"<b>{symbol}</b> — radar grafiği", font=dict(size=16)),
+        legend=dict(orientation="h", yanchor="top", y=-0.20, x=0.5, xanchor="center"),
+        hovermode="x unified",
+    )
+    fig.update_yaxes(title_text="Fiyat (TL)", secondary_y=False, showgrid=True,
+                     gridcolor="rgba(0,0,0,0.05)")
+    fig.update_yaxes(title_text="Ciro (TL)", secondary_y=True, showgrid=False,
+                     range=[0, vmax * 4])
+    st.plotly_chart(fig, width="stretch")
+
+
+def render_radar_table(df, key):
+    """Akilli Radar aday tablosu ve satir detayi."""
+    if df.empty:
+        st.info("Bugün radara giren aday yok.")
+        return
+    df = df.reset_index(drop=True)
+    cols = [c for c in ml_radar.DISPLAY_COLUMNS if c in df.columns]
+    event = st.dataframe(
+        style_results(df[cols]),
+        width="stretch",
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key=f"radar_tbl_{key}",
+        height=430,
+    )
+    try:
+        sel = list(event.selection.rows)
+    except Exception:
+        sel = []
+    if sel:
+        _radar_row_detail(df.iloc[sel[0]])
+
+
+def render_outcomes_panel(outcomes):
+    """Radar sonuc hafizasi: ozet, kirilim ve tekil sinyal gecmisi."""
+    st.caption(
+        "Bu ekran radarın karar hafızasıdır. Her satır geçmişte verilmiş bir sinyalin "
+        "5 veya 10 iş günü sonra ne yaptığını gösterir; kayıtlar model kalitesini ölçmek "
+        "ve ileride yeniden eğitimde kullanmak için saklanır."
+    )
+    if outcomes.empty:
+        st.info("Henüz süresi dolmuş radar sonucu yok. 5/10 iş günü doldukça burası kendiliğinden dolacak.")
+        return
+
+    summary = ml_daily.outcome_summary(outcomes)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Kayıt", int(summary["signals"]))
+    c2.metric("İsabet", _fmt_metric_pct(summary["success_rate"]))
+    c3.metric("Ort. getiri", _fmt_metric_pct(summary["avg_return"]))
+    c4.metric("10G ort.", _fmt_metric_pct(summary["avg_10"]))
+    c5.metric("En iyi grup", summary["best_status"])
+
+    breakdown = ml_daily.outcome_breakdown(outcomes)
+    if not breakdown.empty:
+        st.markdown("**Radar gruplarına göre performans**")
+        st.dataframe(
+            style_results(breakdown),
+            width="stretch",
+            hide_index=True,
+            height=min(260, 52 + len(breakdown) * 44),
+        )
+
+    st.markdown("**Tekil sinyal geçmişi**")
+    f1, f2, f3, f4 = st.columns([1.4, 1.1, 1.1, 1.4])
+    with f1:
+        statuses = ["Hepsi"] + sorted(outcomes["Radar Durumu"].dropna().unique().tolist())
+        status_filter = st.selectbox("Radar durumu", statuses, key="out_status")
+    with f2:
+        horizon_filter = st.selectbox("Sonuç vadesi", ["Hepsi", "5 iş günü", "10 iş günü"], key="out_horizon")
+    with f3:
+        result_filter = st.selectbox("Sonuç", ["Hepsi", "Tuttu", "Tutmadı"], key="out_result")
+    with f4:
+        q_out = st.text_input("Hisse ara", key="out_q").strip().upper()
+
+    show = outcomes.copy()
+    if status_filter != "Hepsi":
+        show = show[show["Radar Durumu"] == status_filter]
+    if horizon_filter != "Hepsi":
+        show = show[show["Sonuç Vadesi"] == horizon_filter]
+    if result_filter != "Hepsi":
+        show = show[show["Tuttu mu?"] == result_filter]
+    if q_out:
+        show = show[show["Hisse"].str.contains(q_out, na=False)]
+
+    cols = [
+        "Sinyal Tarihi", "Hisse", "Radar Durumu", "Yükseliş Puanı", "Göreli Güç",
+        "Güven", "Sonuç Vadesi", "Başlangıç", "Sonuç Tarihi", "Sonuç Fiyatı",
+        "Getiri %", "En Yüksek %", "En Düşük %", "Tuttu mu?", "Basit Neden", "Ana Risk",
+    ]
+    cols = [c for c in cols if c in show.columns]
+    event = st.dataframe(
+        style_results(show[cols]),
+        width="stretch",
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="outcomes_table",
+        height=460,
+    )
+    try:
+        sel = list(event.selection.rows)
+    except Exception:
+        sel = []
+    if sel:
+        _outcome_row_detail(show.iloc[sel[0]])
+
+
+def _outcome_row_detail(row):
+    sym = str(row.get("Hisse", ""))
+    st.divider()
+    st.markdown(f"### {sym} — sonuç detayı")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Sinyal", tr_date(row.get("Sinyal Tarihi")))
+    c2.metric("Sonuç vadesi", str(row.get("Sonuç Vadesi", "—")))
+    c3.metric("Getiri", _fmt_metric_pct(row.get("Getiri %")))
+    c4.metric("Sonuç", str(row.get("Tuttu mu?", "—")))
+    st.markdown(f"**Sinyal anındaki neden:** {row.get('Basit Neden', '—')}")
+    st.markdown(f"**O gün görülen ana risk:** {row.get('Ana Risk', '—')}")
+    st.caption(
+        f"Başlangıç {tr_num(row.get('Başlangıç'), 2)} TL, sonuç fiyatı "
+        f"{tr_num(row.get('Sonuç Fiyatı'), 2)} TL. Bu vade içinde en yüksek "
+        f"{_fmt_metric_pct(row.get('En Yüksek %'))}, en düşük "
+        f"{_fmt_metric_pct(row.get('En Düşük %'))} görüldü."
+    )
+    radar_price_chart(sym, days=160, signal_date=row.get("Sinyal Tarihi"))
+
+
+def _fmt_metric_pct(v):
+    val = _as_number(v)
+    if val is None:
+        return "—"
+    return f"{val:+.1f}%".replace(".", ",")
+
+
+def _radar_row_detail(row):
+    sym = str(row.get("Hisse", ""))
+    st.divider()
+    st.markdown(f"### {sym} — {row.get('Radar Durumu', '')}")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Yükseliş Puanı", tr_num(row.get("Yükseliş Puanı", row.get("ML Puanı")), 1))
+    c2.metric("Göreli Güç", tr_num(row.get("Göreli Güç"), 1))
+    c3.metric("Güven", str(row.get("Güven", "—")))
+    c4.metric("Vade", str(row.get("Vade", "—")))
+    st.caption(
+        "Yükseliş Puanı fiyatın 5-10 iş günü içinde anlamlı yükselme ihtimalini; "
+        "Göreli Güç aynı dönemde BIST evrenine göre güçlü kalma ihtimalini gösterir."
+    )
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Veri Güveni", str(row.get("Veri Güveni", "—")))
+    k2.metric("Likidite", str(row.get("Likidite", "—")))
+    k3.metric("Trend", str(row.get("Trend", "—")))
+    k4.metric("Hacim", str(row.get("Hacim", "—")))
+    reason = str(row.get("Basit Neden", "—"))
+    risk = str(row.get("Ana Risk", "—"))
+    st.markdown(f"**Neden listede?** {reason}")
+    st.caption(_radar_reason_explain(reason))
+    st.markdown(f"**Ne olursa dikkat?** {risk}")
+    st.caption(_radar_risk_explain(risk))
+    st.markdown(f"**Takip planı:** {row.get('Takip Planı', _radar_follow_text(row))}")
+    if row.get("Güven") == "Yüksek":
+        st.success("Model ve teknik koşullar aynı yöne daha net bakıyor. Yine de tek başına al/sat kararı değildir.")
+    elif row.get("Güven") == "Orta":
+        st.info("Sinyal var; fiyat davranışı ve hacim teyidi izlenmeli.")
+    else:
+        st.warning("Sinyal zayıf; sadece izleme listesine almak daha doğru.")
+    radar_price_chart(sym, days=126, signal_date=row.get("data_date") or row.get("Veri Tarihi"))
+    with st.expander("Grafik nasıl okunur?", expanded=True):
+        st.markdown(
+            "- **Mor çizgi fiyat:** Yukarı gidiyorsa hisse güçleniyor, aşağı dönüyorsa sinyal zayıflıyor.\n"
+            "- **Mavi çizgi 20 günlük ortalama:** Kısa vadeli yönü gösterir. Fiyat bunun üstündeyse kısa vade daha olumlu okunur.\n"
+            "- **Turuncu çizgi 50 günlük ortalama:** Daha sakin ana yönü gösterir. Fiyat bunun üstündeyse genel görüntü daha güçlüdür.\n"
+            "- **Açık mor sütunlar ciro:** Sütunlar yükseliyorsa harekete para/hacim eşlik ediyor demektir.\n"
+            "- **Yeşil noktalı çizgi 60G zirve:** Fiyat buraya yakınsa hisse zaten çok yükselmiş olabilir.\n"
+            "- **Kırmızı noktalı çizgi 60G dip:** Fiyat buraya yakınsa tepki arıyor olabilir ama zayıflık riski de vardır.\n"
+            "- **Radar dikey çizgisi:** Modelin bugünkü kapanışta bu hisseyi radara aldığı günü gösterir."
+        )
+
+
+def _radar_reason_explain(text):
+    parts = []
+    if "ortalamaların üzerinde" in text:
+        parts.append("Fiyat son dönemdeki ortalama fiyatlarının üstünde kaldığı için trend bozulmamış görünüyor.")
+    if "para girişi" in text or "hacim" in text:
+        parts.append("İşlem hacmi/ciro artışı, hareketin daha fazla kişi tarafından izlendiğini gösterir.")
+    if "güç toplamış" in text:
+        parts.append("Son birkaç günlük fiyat hareketi yukarı yönde güçlenmiş.")
+    if "Dar banttan" in text:
+        parts.append("Fiyat bir süredir sıkışmış; böyle durumlarda sert hareket ihtimali artabilir.")
+    if "Düşüşten sonra" in text:
+        parts.append("Önce düşmüş, sonra toparlanma denemesi başlamış.")
+    if "Dibe yakın" in text:
+        parts.append("Fiyat son 60 günlük düşük seviyelere yakın; tepki potansiyeli var ama risk de yüksek.")
+    if not parts:
+        parts.append("Model birden fazla küçük işareti birlikte olumlu görmüş.")
+    return " ".join(parts)
+
+
+def _radar_risk_explain(text):
+    if "Hacim teyidi zayıf" in text:
+        return "Fiyat iyi yerde olabilir ama yeterli işlem hacmi yoksa hareket kalıcı olmayabilir; bu yüzden önce izlemek daha doğru."
+    if "fazla koşmuş" in text or "hızlı yükselmiş" in text:
+        return "Hisse kısa sürede çok yükseldiyse yeni alıcı bulamazsa geri çekilebilir."
+    if "Bugün zayıf" in text:
+        return "Günlük hareket aşağıysa toparlanma henüz teyit almamış olabilir."
+    if "Oynaklık yüksek" in text:
+        return "Bu tip hisseler hızlı yükselip hızlı düşebilir; stop/zarar riski daha yüksektir."
+    if "ortalamaların altına" in text or "Kısa ortalamanın altında" in text:
+        return "Fiyat ortalamaların altına inerse modelin gördüğü olumlu yapı bozulabilir."
+    return "Risk gerçekleşirse bu hisseyi zorlamak yerine listeden çıkmasını veya yeniden güçlenmesini beklemek daha mantıklı."
+
+
+def _radar_follow_text(row):
+    status = str(row.get("Radar Durumu", ""))
+    confidence = str(row.get("Güven", ""))
+    if status == "Güçlü Aday":
+        return "Bugün incele; 2-3 gün listede kalıp kalmadığına bak."
+    if status == "Takip Edilecek":
+        return "3-5 gün izle; puan artarsa ciddiye al."
+    if status == "Riskli Ama Hareketli":
+        return "Acele etme; geri çekilme ve hacim teyidi bekle."
+    if confidence == "Düşük":
+        return "Sadece izle; zayıflarsa uğraşma."
+    return "5-10 iş günü içinde puanın güçlenip güçlenmediğini izle."
+
+
 def _clear_selection(key):
     """Aksiyon sonrası tablo seçimini sıfırla (nonce'u artırarak yeni widget)."""
     st.session_state[f"nonce_{key}"] = st.session_state.get(f"nonce_{key}", 0) + 1
@@ -512,7 +867,7 @@ def _row_detail(sym, key, chart_days):
 (tab_summary, tab1, tab2, tab_52, tab_mevsim, tab_hareketlenme, tab_ml, tab3,
  tab_fav, tab_notes, tab4) = st.tabs(
     ["🏠 Özet", "🔻➡️🔺 Dipten Dönüş", "📊 Hacim / Fiyat", "📉 52 Hafta",
-     "📅 Mevsimsellik", "⚡ Hareketlenme", "🧠 ML Sinyal", "📋 Tüm Hisseler",
+     "📅 Mevsimsellik", "⚡ Hareketlenme", "🧠 Akıllı Radar", "📋 Tüm Hisseler",
      "⭐ Favoriler", "📝 Notlar", "🚫 Devre Dışı"]
 )
 
@@ -772,35 +1127,123 @@ with tab_hareketlenme:
         render_table(res_har_show, "thar", chart_days=90)
 
 
-# --- ML Sinyal ---
+# --- Akıllı Radar ---
 with tab_ml:
-    st.subheader("🧠 ML Sinyal")
+    st.subheader("🧠 Akıllı Radar")
     st.caption(
-        "Bu sekme **al/sat tavsiyesi değildir**. Yalnızca geçmiş fiyat, düzeltilmiş "
-        "kapanış ve TL ciro verilerinden üretilmiş, backtest kabul kriterini geçmiş "
-        "model varsa sinyal puanı gösterir."
+        "Bu ekran **al/sat tavsiyesi değildir**. Son kesin kapanış verisine göre "
+        "5-10 iş günü içinde anlamlı yükseliş ihtimali olan adayları "
+        "seçer; nedeni ve riski sade dille gösterir."
     )
+    st.info(
+        "**Yükseliş Puanı** ana göstergedir: modelin 5-10 iş günü içinde fiyatın belirli "
+        "bir eşik üstünde yükselme ihtimalini 0-100 arası okumasıdır. **Göreli Güç** yardımcı "
+        "göstergedir: aynı dönemde BIST evreninden daha iyi kalma ihtimalini gösterir."
+    )
+    report = load_ml_report(_data_version())
+    if report:
+        summary = report.get("summary", {})
+        data_info = report.get("data", {})
+        with st.expander("Model durumu", expanded=False):
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Backtest", "Geçti" if summary.get("passed") else "Geçmedi")
+            c2.metric("Top20 10G", _fmt_metric_pct(summary.get("top20_abs_fwd_ret_10")))
+            c3.metric("Hisse", data_info.get("symbols", "—"))
+            c4.metric("Eğitim aralığı", f"{data_info.get('start', '—')} → {data_info.get('end', '—')}")
+            st.caption(
+                "Bu rapor eğitim verisi üzerinde zaman sıralı walk-forward testten gelir. "
+                "Uzun geçmiş yenilendikten sonra model tekrar eğitilirse bu özet de değişir."
+            )
     if not data:
         st.info("Önce kenar çubuğundan veriyi indirin.")
     else:
-        ml_res, ml_err = ml_predict.score_latest(data, snapshot=son_map, fark=fark_map)
-        if ml_err:
-            st.info(ml_err)
+        with st.expander("Kendi takip listem", expanded=False):
+            favs_now = cache.get_favorites()
+            syms_pool = set(cached_syms)
+            if not close_df.empty:
+                syms_pool |= set(close_df["symbol"])
+            addable = [s for s in sorted(syms_pool) if s not in favs_now]
+            add_watch = st.multiselect("Takibe eklenecek hisse", addable, key="radar_watch_add")
+            if st.button("Takibe ekle", key="radar_watch_add_btn") and add_watch:
+                for s in add_watch:
+                    cache.add_favorite(s)
+                bump_version()
+                st.rerun()
+            favs_now = cache.get_favorites()
+            if favs_now:
+                st.caption("Takipteki hisseler:")
+                for s in favs_now:
+                    c1, c2 = st.columns([4, 1])
+                    c1.write(s)
+                    if c2.button("Çıkar", key=f"radar_watch_remove_{s}"):
+                        cache.remove_favorite(s)
+                        bump_version()
+                        st.rerun()
+            else:
+                st.caption("Henüz takip listene eklenmiş hisse yok.")
+
+        favs_now = cache.get_favorites()
+        radar_df, radar_err, radar_info = ml_daily.today_radar(
+            data, snapshot=son_map, fark=fark_map, data_date=gmax, watch_symbols=favs_now
+        )
+        if radar_err:
+            st.info(radar_err)
             st.code("python -m ml_signals.train")
             st.caption(
-                "Eğitim komutu zaman sıralı backtest yapar. Model, üst 20 seçiminin "
-                "10 iş günlük göreli getirisi pozitifse ve en az bir basit baz çizgiyi "
-                "geçerse kaydedilir."
+                "Model yoksa veya backtest geçmediyse radar canlı aday göstermez. "
+                "Bu bilinçli güvenlik kuralıdır."
             )
         else:
-            st.markdown(f"**{len(ml_res)} hisse** skorlandı — en yüksek ML puanı üstte.")
+            try:
+                ml_daily.evaluate_outcomes(data, as_of_date=gmax)
+            except Exception as e:
+                st.warning(f"Sonuç kayıtları güncellenemedi: {e}")
+
+            data_date = radar_info.get("data_date") or (gmax or "—")
+            if radar_info.get("created"):
+                st.success(f"{tr_date(data_date)} kapanışı için bugünün radar listesi oluşturuldu.")
+            else:
+                st.caption(f"{tr_date(data_date)} kapanışı daha önce işlendi; aynı gün ikinci radar kaydı yazılmadı.")
+
+            counts = radar_df["Radar Durumu"].value_counts()
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Güçlü aday", int(counts.get("Güçlü Aday", 0)))
+            m2.metric("Takip edilecek", int(counts.get("Takip Edilecek", 0)))
+            m3.metric("Riskli ama hareketli", int(counts.get("Riskli Ama Hareketli", 0)))
+            m4.metric("Kendi takibim", int(len(set(favs_now) & set(radar_df["Hisse"]))))
             st.caption(
-                "ML Puanı = 5G ve 10G üst-%30 göreli güç olasılıklarının ortalaması "
-                "(0-100). Güven, skorun 50 eşiğinden uzaklığına göre hesaplanır."
+                "Yükseliş Puanı 0-100 arasıdır. 50 civarı zayıf, 60 üstü izlemeye değer, "
+                "70 üstü daha güçlü sinyal sayılır. Göreli Güç destekleyici filtredir."
             )
-            q_ml = st.text_input("Hisse ara", key="q_ml").strip().upper()
-            ml_show = ml_res[ml_res["Sembol"].str.contains(q_ml)] if q_ml else ml_res
-            render_table(ml_show, "tml", chart_days=126, height=520)
+            with st.expander("Liste anlamları", expanded=False):
+                st.markdown(
+                    "- **Güçlü Aday:** Yükseliş puanı ve göreli güç birlikte olumlu; bugün detaylı bakılır.\n"
+                    "- **Takip Edilecek:** Sinyal var ama teyit bekler; 3-5 iş günü puan/grafik izlenir.\n"
+                    "- **Riskli Ama Hareketli:** Hareket var ama oynaklık veya hızlı yükseliş riski yüksek.\n"
+                    "- **Kendi Takibim:** Senin eklediğin hisseler; radara girmese bile sonucu kayda alınır.\n"
+                    "- **Sonuçlar:** Süresi dolan sinyallerin 5/10 iş günü sonra gerçekten tutup tutmadığını gösterir."
+                )
+
+            view = st.pills(
+                "Liste",
+                ["Tümü", "Güçlü Aday", "Takip Edilecek", "Riskli Ama Hareketli", "Kendi Takibim", "Sonuçlar"],
+                default="Tümü",
+                selection_mode="single",
+            ) or "Tümü"
+            if view == "Sonuçlar":
+                outcomes = ml_daily.load_outcomes()
+                render_outcomes_panel(outcomes)
+            elif view == "Kendi Takibim":
+                favs = set(cache.get_favorites())
+                show = radar_df[radar_df["Hisse"].isin(favs)].copy() if favs else radar_df.iloc[0:0]
+            else:
+                show = radar_df if view == "Tümü" else radar_df[radar_df["Radar Durumu"] == view]
+            if view != "Sonuçlar":
+                q_ml = st.text_input("Hisse ara", key="q_ml").strip().upper()
+                if q_ml:
+                    show = show[show["Hisse"].str.contains(q_ml)]
+                st.markdown(f"**{len(show)} aday** gösteriliyor. Satıra tıkla → açıklama ve grafik.")
+                render_radar_table(show, "tml")
 
 
 # --- Tab 3: Tüm Hisseler (son kapanış) ---

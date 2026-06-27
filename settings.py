@@ -18,7 +18,9 @@ ISYATIRIM_URL = (
 )
 
 # Gunluk backfill derinligi (yil) ve mevsimsellik icin aylik gecmis derinligi (yil)
-BACKFILL_YEARS = 2
+# ML katmani hissenin mumkun oldugunca uzun fiyat/ciro davranisini kullanabilsin diye
+# gunluk tam backfill de uzun tutulur. Normal gunluk guncelleme yine kisa pencere ceker.
+BACKFILL_YEARS = 15
 MONTHLY_YEARS = 15
 
 # Donem secenekleri: etiket -> islem gunu sayisi (yaklasik)

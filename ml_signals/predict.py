@@ -5,12 +5,15 @@ from pathlib import Path
 import os
 import warnings
 
+import numpy as np
 import pandas as pd
 
+from ml_signals import radar
 from ml_signals.features import FEATURE_COLUMNS, latest_features
 
 
 MODEL_PATH = Path(__file__).resolve().parent / "model.joblib"
+MODEL_KIND = "absolute_upside_v4"
 
 
 def _load_artifact(path=MODEL_PATH):
@@ -24,11 +27,16 @@ def _load_artifact(path=MODEL_PATH):
     except Exception as e:
         return None, f"ML modeli yüklenemedi: {e}"
     meta = artifact.get("metadata", {})
+    if artifact.get("model_kind") != MODEL_KIND:
+        return None, "ML modeli eski hedef/sürümle eğitilmiş; yükseliş radarı için yeniden eÄŸitilmeli."
     if not meta.get("summary", {}).get("passed"):
         return None, "ML modeli var ama backtest kabul kriterini geçmemiş; canlı sinyal gösterilmiyor."
     missing = [c for c in FEATURE_COLUMNS if c not in artifact.get("feature_columns", [])]
     if missing:
-        return None, "ML modeli bu uygulama sürümüyle uyumlu değil; yeniden eğitilmeli."
+        return None, "ML modeli bu uygulama sürümüyle uyumlu değil; yeniden eÄŸitilmeli."
+    required_models = ["up_model_5", "up_model_10", "rel_model_5", "rel_model_10"]
+    if any(k not in artifact for k in required_models):
+        return None, "ML modeli eski hedefle eğitilmiş; yükseliş radarı için yeniden eÄŸitilmeli."
     return artifact, None
 
 
@@ -38,7 +46,16 @@ def _confidence(score):
         return "Yüksek"
     if d >= 0.12:
         return "Orta"
-    return "Düşük"
+    return "DÃ¼ÅŸÃ¼k"
+
+
+def _positive_proba(model, x):
+    proba = model.predict_proba(x)
+    estimator = model.steps[-1][1] if hasattr(model, "steps") else model
+    classes = list(getattr(estimator, "classes_", [0, 1]))
+    if 1 not in classes:
+        return np.zeros(len(x))
+    return proba[:, classes.index(1)]
 
 
 def _reasons(row):
@@ -46,15 +63,15 @@ def _reasons(row):
     if row.get("vol_ratio_5_20", 0) >= 2.0:
         reasons.append("5G ciro yüksek")
     if row.get("vol_ratio_2_20", 0) >= 2.5:
-        reasons.append("son 2G hacim patlaması")
+        reasons.append("son 2G hacim patlamasÄ±")
     if row.get("ret_5", 0) > 3 and row.get("ret_20", 0) > 0:
-        reasons.append("kısa momentum pozitif")
+        reasons.append("kÄ±sa momentum pozitif")
     if row.get("ret_20", 0) < -8 and row.get("ret_5", 0) > 0:
-        reasons.append("düşüş sonrası tepki")
+        reasons.append("dÃ¼ÅŸÃ¼ÅŸ sonrasÄ± tepki")
     if row.get("volatility_ratio_20_60", 1) < 0.80:
-        reasons.append("volatilite sıkışması")
+        reasons.append("volatilite sÄ±kÄ±ÅŸmasÄ±")
     if row.get("sma20_gap", 0) > 0 and row.get("sma50_gap", 0) > 0:
-        reasons.append("ortalamaların üstünde")
+        reasons.append("ortalamalarÄ±n Ã¼stÃ¼nde")
     if row.get("drawdown_60", 0) < -12 and row.get("low_distance_60", 0) < 8:
         reasons.append("60G dibe yakın")
     if not reasons:
@@ -76,23 +93,51 @@ def score_latest(data, snapshot=None, fark=None, model_path=MODEL_PATH):
         return pd.DataFrame(), "ML skoru için yeterli geçmiş veri yok."
 
     cols = artifact["feature_columns"]
-    model_5 = artifact["model_5"]
-    model_10 = artifact["model_10"]
-    p5 = model_5.predict_proba(feat[cols])[:, 1]
-    p10 = model_10.predict_proba(feat[cols])[:, 1]
-    score = (p5 + p10) / 2.0
+    up5 = _positive_proba(artifact["up_model_5"], feat[cols])
+    up10 = _positive_proba(artifact["up_model_10"], feat[cols])
+    up_score = (up5 + up10) / 2.0
+    rel5 = _positive_proba(artifact["rel_model_5"], feat[cols])
+    rel10 = _positive_proba(artifact["rel_model_10"], feat[cols])
+    rel_score = (rel5 + rel10) / 2.0
 
     snapshot = snapshot or {}
     fark = fark or {}
-    out = pd.DataFrame({
-        "Sembol": feat["symbol"],
-        "ML Puanı": (score * 100).round(1),
-        "5G Skor": (p5 * 100).round(1),
-        "10G Skor": (p10 * 100).round(1),
-        "Güven": [_confidence(x) for x in score],
-        "Ana Nedenler": [_reasons(r) for _, r in feat.iterrows()],
-        "Son": [snapshot.get(s) for s in feat["symbol"]],
-        "Fark %": [fark.get(s) for s in feat["symbol"]],
-    })
-    out = out.sort_values(["ML Puanı", "10G Skor"], ascending=False).reset_index(drop=True)
+    rows = []
+    for i, (_, r) in enumerate(feat.iterrows()):
+        sym = r["symbol"]
+        s5 = round(float(up5[i]) * 100.0, 1)
+        s10 = round(float(up10[i]) * 100.0, 1)
+        up = round(float(up_score[i]) * 100.0, 1)
+        rel = round(float(rel_score[i]) * 100.0, 1)
+        son = snapshot.get(sym)
+        f = fark.get(sym)
+        status = radar.radar_status(up, s5, s10, r, f, relative_score=rel)
+        conf = radar.adjust_confidence(radar.confidence(float(up_score[i]), s5, s10), r)
+        rows.append({
+            "Sembol": sym,
+            "Hisse": sym,
+            "data_date": r["date"].date().isoformat() if hasattr(r["date"], "date") else str(r["date"])[:10],
+            "Radar Durumu": status,
+            "Yükseliş Puanı": up,
+            "Göreli Güç": rel,
+            "ML Puanı": up,
+            "5G Yükseliş": s5,
+            "10G Yükseliş": s10,
+            "5G Skor": s5,
+            "10G Skor": s10,
+            "Güven": conf,
+            "Veri Güveni": radar.data_confidence(r),
+            "Likidite": radar.liquidity_label(r),
+            "Trend": radar.trend_label(r),
+            "Hacim": radar.volume_label(r),
+            "Vade": radar.horizon(s5, s10),
+            "Takip Planı": radar.follow_plan(status, conf, up),
+            "Basit Neden": radar.simple_reason(r),
+            "Ana Risk": radar.main_risk(r, f),
+            "Ana Nedenler": radar.simple_reason(r),
+            "Son": son,
+            "Fark %": f,
+        })
+    out = pd.DataFrame(rows)
+    out = out.sort_values(["Yükseliş Puanı", "Göreli Güç"], ascending=False).reset_index(drop=True)
     return out, None
