@@ -15,6 +15,8 @@ DISPLAY_COLUMNS = [
     "Trend",
     "Hacim",
     "Vade",
+    "5G Sonuç Günü",
+    "10G Sonuç Günü",
     "Takip Planı",
     "Basit Neden",
     "Ana Risk",

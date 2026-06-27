@@ -98,6 +98,32 @@ class MlSignalsTest(unittest.TestCase):
         self.assertEqual(float(updated.iloc[0]["Son"]), 11.0)
         self.assertEqual(float(updated.iloc[0]["Fark %"]), 2.5)
 
+
+    def test_daily_snapshot_includes_result_dates(self):
+        db = sqlite3.connect(":memory:")
+        signal = pd.DataFrame([{
+            "Hisse": "TEST",
+            "Radar Durumu": "Takip Edilecek",
+            "Yükseliş Puanı": 62.0,
+            "Göreli Güç": 55.0,
+            "5G Yükseliş": 61.0,
+            "10G Yükseliş": 63.0,
+            "Güven": "Orta",
+            "Vade": "5-10 iş günü",
+            "Basit Neden": "Fiyat güç toplamış",
+            "Ana Risk": "Puan düşerse dikkat",
+            "Son": 10.0,
+            "Fark %": 0.0,
+        }])
+        self.assertTrue(daily.save_snapshot_once(signal, "2026-06-25", db=db))
+        idx = pd.bdate_range("2026-06-25", periods=12)
+        prices = pd.DataFrame({"adj_close": np.linspace(10.0, 11.0, len(idx))}, index=idx)
+        shown = daily._with_result_dates(daily.load_snapshot("2026-06-25", db=db), {"TEST": prices})
+        self.assertIn("5G Sonuç Günü", shown.columns)
+        self.assertIn("10G Sonuç Günü", shown.columns)
+        self.assertEqual(shown.iloc[0]["5G Sonuç Günü"], "02.07.2026")
+        self.assertEqual(shown.iloc[0]["10G Sonuç Günü"], "09.07.2026")
+
     def test_daily_outcomes_are_recorded_after_horizon(self):
         db = sqlite3.connect(":memory:")
         signal = pd.DataFrame([{

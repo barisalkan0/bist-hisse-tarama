@@ -113,7 +113,8 @@ def _display(rows) -> pd.DataFrame:
             "Veri Tarihi", "Hisse", "Radar Durumu", "Yükseliş Puanı", "Göreli Güç",
             "ML Puanı", "5G Yükseliş", "10G Yükseliş", "5G Skor", "10G Skor",
             "Güven", "Veri Güveni", "Likidite", "Trend", "Hacim",
-            "Vade", "Takip Planı", "Basit Neden", "Ana Risk", "Son", "Fark %",
+            "Vade", "5G Sonuç Günü", "10G Sonuç Günü", "Takip Planı",
+            "Basit Neden", "Ana Risk", "Son", "Fark %",
             "created_at", "data_date",
         ])
     df = pd.DataFrame([dict(zip(cols, r)) for r in rows])
@@ -138,6 +139,8 @@ def _display(rows) -> pd.DataFrame:
         "Trend": df["trend_label"],
         "Hacim": df["volume_label"],
         "Vade": df["horizon"],
+        "5G Sonuç Günü": "—",
+        "10G Sonuç Günü": "—",
         "Takip Planı": follow,
         "Basit Neden": df["simple_reason"],
         "Ana Risk": df["main_risk"],
@@ -262,7 +265,7 @@ def today_radar(data, snapshot=None, fark=None, data_date=None, watch_symbols=No
     if not existing.empty:
         refresh_market_fields(data_date, snapshot=snapshot, fark=fark)
         _append_watch_symbols(data, data_date, watch_symbols, snapshot=snapshot, fark=fark)
-        return load_snapshot(data_date), None, {"data_date": data_date, "created": False}
+        return _with_result_dates(load_snapshot(data_date), data), None, {"data_date": data_date, "created": False}
 
     scores, err = score_latest(data, snapshot=snapshot, fark=fark)
     if err:
@@ -275,7 +278,7 @@ def today_radar(data, snapshot=None, fark=None, data_date=None, watch_symbols=No
             "created": False,
         }
     saved = save_snapshot_once(selected, data_date)
-    return load_snapshot(data_date), None, {"data_date": data_date, "created": saved}
+    return _with_result_dates(load_snapshot(data_date), data), None, {"data_date": data_date, "created": saved}
 
 
 def evaluate_outcomes(data, as_of_date=None, db=None) -> int:
@@ -499,6 +502,53 @@ def _append_watch_symbols(data, data_date: str, watch_symbols, snapshot=None, fa
     before = db.total_changes
     save_snapshot_once(add, data_date, db=db, allow_append=True)
     return db.total_changes - before
+
+
+def _with_result_dates(display: pd.DataFrame, data) -> pd.DataFrame:
+    """Radar tablosuna 5G/10G sonucunun hangi gune denk geldigini ekler."""
+    if display.empty:
+        return display
+    out = display.copy()
+    for col in ("5G Sonuç Günü", "10G Sonuç Günü"):
+        if col not in out.columns:
+            out[col] = "—"
+    for idx, row in out.iterrows():
+        symbol = str(row.get("Hisse", "")).strip().upper()
+        signal_date = row.get("data_date") or row.get("Veri Tarihi")
+        out.at[idx, "5G Sonuç Günü"] = _target_result_date(data.get(symbol), signal_date, 5)
+        out.at[idx, "10G Sonuç Günü"] = _target_result_date(data.get(symbol), signal_date, 10)
+    return out
+
+
+def _target_result_date(df: pd.DataFrame | None, signal_date, horizon: int) -> str:
+    """Mumkunse gercek cache islem gununu, yoksa hafta sonu atlayan tahmini gunu verir."""
+    try:
+        signal_ts = pd.to_datetime(signal_date).normalize()
+    except Exception:
+        return "—"
+    if df is not None and not df.empty:
+        try:
+            idx = pd.to_datetime(df.index).normalize()
+            pos = idx.get_indexer([signal_ts])
+            if len(pos) and pos[0] >= 0:
+                target_pos = int(pos[0]) + int(horizon)
+                if target_pos < len(idx):
+                    return _fmt_result_date(idx[target_pos])
+        except Exception:
+            pass
+    try:
+        target = pd.bdate_range(signal_ts + pd.Timedelta(days=1), periods=int(horizon))[-1]
+        return _fmt_result_date(target)
+    except Exception:
+        return "—"
+
+
+def _fmt_result_date(value) -> str:
+    try:
+        ts = pd.to_datetime(value)
+        return f"{ts.day:02d}.{ts.month:02d}.{ts.year}"
+    except Exception:
+        return str(value)[:10] if value is not None else "—"
 
 
 def _future_prices(df: pd.DataFrame | None, signal_date: str, as_of_date=None):
