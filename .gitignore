@@ -10,3 +10,6 @@ __pycache__/
 # Bunun yerine salt-okunur data/seed.sqlite repoda durur ve calisma kopyasi
 # acilista ondan uretilir.
 data/cache.sqlite
+
+# Streamlit secrets - gizli anahtarlar, asla commit edilmez
+.streamlit/secrets.toml

@@ -14,7 +14,7 @@ from plotly.subplots import make_subplots
 import streamlit as st
 
 import settings as cfg
-from data import cache, universe, fetch, store
+from data import cache, universe, fetch, store, supabase_store
 from ml_signals import daily as ml_daily
 from ml_signals import radar as ml_radar
 from screeners import base, dip_donus, hacim_fiyat, hafta52, mevsim, sessizlik
@@ -471,20 +471,56 @@ with st.sidebar:
                 st.rerun()
 
     st.divider()
-    _en, _ok, _err = st.session_state.get("store_diag", (False, False, None))
-    if _ok:
-        st.caption("🟢 Kalıcı gizleme: **bağlı** (Upstash) — liste yeniden başlamada korunur.")
-    elif _en:
-        st.caption("🟠 Kalıcı gizleme: anahtar **var** ama **bağlanılamadı**.")
-        with st.expander("Hata ayrıntısı"):
-            st.code(_err or "bilinmiyor")
+    # ---- Hesap / Giriş ----
+    if supabase_store.is_configured():
+        _sb_user = st.session_state.get("user")
+        if _sb_user:
+            st.caption(f"👤 **{_sb_user['email']}**")
+            _is_pro = supabase_store.is_pro(
+                _sb_user["id"],
+                st.session_state.get("access_token", ""),
+                st.session_state.get("refresh_token", ""),
+            )
+            if _is_pro:
+                st.caption("✅ Pro abonelik aktif")
+            else:
+                st.caption("🔓 Ücretsiz hesap — Akıllı Radar Pro gerektirir")
+            if st.button("Çıkış yap", key="auth_logout", width="stretch"):
+                supabase_store.logout()
+                for _k in ("user", "access_token", "refresh_token"):
+                    st.session_state.pop(_k, None)
+                st.rerun()
+        else:
+            with st.expander("🔑 Giriş yap"):
+                _auth_email = st.text_input("E-posta", key="auth_email")
+                _auth_pw = st.text_input("Şifre", type="password", key="auth_pw")
+                if st.button("Giriş", key="auth_login_btn", width="stretch"):
+                    if _auth_email and _auth_pw:
+                        _u, _sess, _err = supabase_store.login(_auth_email, _auth_pw)
+                        if _err:
+                            st.error(_err)
+                        else:
+                            st.session_state["user"] = _u
+                            st.session_state["access_token"] = _sess.access_token
+                            st.session_state["refresh_token"] = _sess.refresh_token
+                            st.rerun()
+                    else:
+                        st.warning("E-posta ve şifre girin.")
     else:
-        st.caption("🟡 Kalıcı gizleme: anahtar **okunamadı** (Secrets adı/formatı?).")
-        with st.expander("Teşhis: uygulamanın gördüğü anahtar adları"):
-            st.write("Değerler değil, yalnızca **isimler** (gizli değil):")
-            st.code("\n".join(store.secret_keys()) or "(hiç anahtar yok)")
-            st.caption("Burada `UPSTASH_REDIS_REST_URL` ve `UPSTASH_REDIS_REST_TOKEN` "
-                       "isimlerini birebir görmüyorsan, Secrets'taki isim/format hatalıdır.")
+        _en, _ok, _err = st.session_state.get("store_diag", (False, False, None))
+        if _ok:
+            st.caption("🟢 Kalıcı gizleme: **bağlı** (Upstash) — liste yeniden başlamada korunur.")
+        elif _en:
+            st.caption("🟠 Kalıcı gizleme: anahtar **var** ama **bağlanılamadı**.")
+            with st.expander("Hata ayrıntısı"):
+                st.code(_err or "bilinmiyor")
+        else:
+            st.caption("🟡 Kalıcı gizleme: anahtar **okunamadı** (Secrets adı/formatı?).")
+            with st.expander("Teşhis: uygulamanın gördüğü anahtar adları"):
+                st.write("Değerler değil, yalnızca **isimler** (gizli değil):")
+                st.code("\n".join(store.secret_keys()) or "(hiç anahtar yok)")
+                st.caption("Burada `UPSTASH_REDIS_REST_URL` ve `UPSTASH_REDIS_REST_TOKEN` "
+                           "isimlerini birebir görmüyorsan, Secrets'taki isim/format hatalıdır.")
     st.caption(
         "Gün sonu (EOD) veriye dayanır.\n\n"
         "**Kaynak:** mynet (hisse listesi + isimler), İş Yatırım (geçmiş kapanış + "
@@ -862,6 +898,125 @@ def _row_detail(sym, key, chart_days):
 
 
 # ----------------------------------------------------------------------------
+# Radar sekmesi içeriği (abonelik kapısı arkasında çağrılır)
+# ----------------------------------------------------------------------------
+def _render_radar_tab():
+    """Akıllı Radar sekme içeriği — sadece pro kullanıcılar görür."""
+    with st.expander("Kendi takip listem", expanded=False):
+        favs_now = cache.get_favorites()
+        syms_pool = set(cached_syms)
+        if not close_df.empty:
+            syms_pool |= set(close_df["symbol"])
+        addable = [s for s in sorted(syms_pool) if s not in favs_now]
+        add_watch = st.multiselect("Takibe eklenecek hisse", addable, key="radar_watch_add")
+        if st.button("Takibe ekle", key="radar_watch_add_btn") and add_watch:
+            for s in add_watch:
+                cache.add_favorite(s)
+            bump_version()
+            st.rerun()
+        favs_now = cache.get_favorites()
+        if favs_now:
+            st.caption("Takipteki hisseler:")
+            for s in favs_now:
+                c1, c2 = st.columns([4, 1])
+                c1.write(s)
+                if c2.button("Çıkar", key=f"radar_watch_remove_{s}"):
+                    cache.remove_favorite(s)
+                    bump_version()
+                    st.rerun()
+        else:
+            st.caption("Henüz takip listene eklenmiş hisse yok.")
+
+    favs_now = cache.get_favorites()
+    radar_df, radar_err, radar_info = ml_daily.today_radar(
+        data, snapshot=son_map, fark=fark_map, data_date=gmax, watch_symbols=favs_now
+    )
+    if radar_err:
+        st.info(radar_err)
+        st.code("python -m ml_signals.train")
+        st.caption(
+            "Model yoksa veya backtest geçmediyse radar canlı aday göstermez. "
+            "Bu bilinçli güvenlik kuralıdır."
+        )
+    else:
+        try:
+            ml_daily.evaluate_outcomes(data, as_of_date=gmax)
+        except Exception as e:
+            st.warning(f"Sonuç kayıtları güncellenemedi: {e}")
+
+        data_date = radar_info.get("data_date") or (gmax or "—")
+        if radar_info.get("created"):
+            st.success(f"{tr_date(data_date)} kapanışı için bugünün radar listesi oluşturuldu.")
+        else:
+            st.caption(f"{tr_date(data_date)} kapanışı daha önce işlendi; aynı gün ikinci radar kaydı yazılmadı.")
+
+        counts = radar_df["Radar Durumu"].value_counts()
+        strong_count = int(counts.get("Güçlü Aday", 0))
+        watch_count = int(counts.get("Takip Edilecek", 0))
+        risky_count = int(counts.get("Riskli Ama Hareketli", 0))
+        own_count = int(len(set(favs_now) & set(radar_df["Hisse"])))
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Bugün güçlü sinyal", strong_count)
+        m2.metric("Teyit bekleyen", watch_count)
+        m3.metric("Hareketli / riskli", risky_count)
+        m4.metric("Kendi takibim", own_count)
+        st.caption(
+            "Yükseliş Puanı 0-100 arasıdır. 50 civarı zayıf, 60 üstü izlemeye değer, "
+            "70 üstü daha güçlü sinyal sayılır. Göreli Güç destekleyici filtredir."
+        )
+        if strong_count == 0:
+            st.info(
+                "Bugün güçlü sinyal yoksa bu normaldir. Sistem zayıf günü zorla aday üretmez; "
+                "yalnızca takip etmeye değer hisseleri ayrı gösterir."
+            )
+        with st.expander("Liste anlamları", expanded=False):
+            st.markdown(
+                "- **Bugün Güçlü Sinyal:** Yükseliş puanı, göreli güç, veri geçmişi ve likidite birlikte olumlu; bugün detaylı incelenir.\n"
+                "- **Teyit Bekleyenler:** Yükseliş ihtimali var ama göreli güç, hacim veya trend tarafında teyit eksik; 3-5 iş günü puan/grafik izlenir.\n"
+                "- **Hareketli / Riskli:** Hissede hareket var ama oynaklık, zayıf teyit veya hızlı yükseliş riski yüksek; acele edilmez.\n"
+                "- **Kendi Takibim:** Senin eklediğin hisseler; radara girmese bile sonucu kayda alınır.\n"
+                "- **Sonuçlar:** Süresi dolan sinyallerin 5/10 iş günü sonra gerçekten tutup tutmadığını gösterir."
+            )
+
+        view_label_map = {
+            "Radar Listesi": "Tümü",
+            "Bugün Güçlü Sinyal": "Güçlü Aday",
+            "Teyit Bekleyenler": "Takip Edilecek",
+            "Hareketli / Riskli": "Riskli Ama Hareketli",
+            "Kendi Takibim": "Kendi Takibim",
+            "Sonuçlar": "Sonuçlar",
+        }
+        selected_label = st.pills(
+            "Liste",
+            list(view_label_map.keys()),
+            default="Radar Listesi",
+            selection_mode="single",
+        ) or "Radar Listesi"
+        view = view_label_map[selected_label]
+        if view == "Sonuçlar":
+            outcomes = ml_daily.load_outcomes()
+            render_outcomes_panel(outcomes)
+        elif view == "Kendi Takibim":
+            favs = set(cache.get_favorites())
+            show = radar_df[radar_df["Hisse"].isin(favs)].copy() if favs else radar_df.iloc[0:0]
+        else:
+            show = radar_df if view == "Tümü" else radar_df[radar_df["Radar Durumu"] == view]
+        if view != "Sonuçlar":
+            q_ml = st.text_input("Hisse ara", key="q_ml").strip().upper()
+            if q_ml:
+                show = show[show["Hisse"].str.contains(q_ml)]
+            display_show = show.copy()
+            if "Radar Durumu" in display_show.columns:
+                display_show["Radar Durumu"] = display_show["Radar Durumu"].replace({
+                    "Güçlü Aday": "Bugün Güçlü Sinyal",
+                    "Takip Edilecek": "Teyit Bekleyen",
+                    "Riskli Ama Hareketli": "Hareketli / Riskli",
+                })
+            st.markdown(f"**{len(display_show)} aday** gösteriliyor. Satıra tıkla → açıklama ve grafik.")
+            render_radar_table(display_show, "tml")
+
+
+# ----------------------------------------------------------------------------
 # Sekmeler
 # ----------------------------------------------------------------------------
 (tab_summary, tab1, tab2, tab_52, tab_mevsim, tab_hareketlenme, tab_ml, tab3,
@@ -1157,118 +1312,23 @@ with tab_ml:
     if not data:
         st.info("Önce kenar çubuğundan veriyi indirin.")
     else:
-        with st.expander("Kendi takip listem", expanded=False):
-            favs_now = cache.get_favorites()
-            syms_pool = set(cached_syms)
-            if not close_df.empty:
-                syms_pool |= set(close_df["symbol"])
-            addable = [s for s in sorted(syms_pool) if s not in favs_now]
-            add_watch = st.multiselect("Takibe eklenecek hisse", addable, key="radar_watch_add")
-            if st.button("Takibe ekle", key="radar_watch_add_btn") and add_watch:
-                for s in add_watch:
-                    cache.add_favorite(s)
-                bump_version()
-                st.rerun()
-            favs_now = cache.get_favorites()
-            if favs_now:
-                st.caption("Takipteki hisseler:")
-                for s in favs_now:
-                    c1, c2 = st.columns([4, 1])
-                    c1.write(s)
-                    if c2.button("Çıkar", key=f"radar_watch_remove_{s}"):
-                        cache.remove_favorite(s)
-                        bump_version()
-                        st.rerun()
+        _r_user = st.session_state.get("user")
+        _r_unlocked = not supabase_store.is_configured()
+        if supabase_store.is_configured():
+            if _r_user is None:
+                st.warning("🔐 Bu özelliği görmek için **kenar çubuğundan giriş yapın**.")
+                st.caption("Akıllı Radar Pro abonelik gerektirir. Kenar çubuğundaki 'Giriş yap' bölümünü kullanın.")
+            elif not supabase_store.is_pro(
+                _r_user["id"],
+                st.session_state.get("access_token", ""),
+                st.session_state.get("refresh_token", ""),
+            ):
+                st.warning("🔒 **Akıllı Radar Pro abonelik gerektirir.**")
+                st.caption("Pro plana geçerek tüm radar özelliklerini açabilirsiniz.")
             else:
-                st.caption("Henüz takip listene eklenmiş hisse yok.")
-
-        favs_now = cache.get_favorites()
-        radar_df, radar_err, radar_info = ml_daily.today_radar(
-            data, snapshot=son_map, fark=fark_map, data_date=gmax, watch_symbols=favs_now
-        )
-        if radar_err:
-            st.info(radar_err)
-            st.code("python -m ml_signals.train")
-            st.caption(
-                "Model yoksa veya backtest geçmediyse radar canlı aday göstermez. "
-                "Bu bilinçli güvenlik kuralıdır."
-            )
-        else:
-            try:
-                ml_daily.evaluate_outcomes(data, as_of_date=gmax)
-            except Exception as e:
-                st.warning(f"Sonuç kayıtları güncellenemedi: {e}")
-
-            data_date = radar_info.get("data_date") or (gmax or "—")
-            if radar_info.get("created"):
-                st.success(f"{tr_date(data_date)} kapanışı için bugünün radar listesi oluşturuldu.")
-            else:
-                st.caption(f"{tr_date(data_date)} kapanışı daha önce işlendi; aynı gün ikinci radar kaydı yazılmadı.")
-
-            counts = radar_df["Radar Durumu"].value_counts()
-            strong_count = int(counts.get("Güçlü Aday", 0))
-            watch_count = int(counts.get("Takip Edilecek", 0))
-            risky_count = int(counts.get("Riskli Ama Hareketli", 0))
-            own_count = int(len(set(favs_now) & set(radar_df["Hisse"])))
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Bugün güçlü sinyal", strong_count)
-            m2.metric("Teyit bekleyen", watch_count)
-            m3.metric("Hareketli / riskli", risky_count)
-            m4.metric("Kendi takibim", own_count)
-            st.caption(
-                "Yükseliş Puanı 0-100 arasıdır. 50 civarı zayıf, 60 üstü izlemeye değer, "
-                "70 üstü daha güçlü sinyal sayılır. Göreli Güç destekleyici filtredir."
-            )
-            if strong_count == 0:
-                st.info(
-                    "Bugün güçlü sinyal yoksa bu normaldir. Sistem zayıf günü zorla aday üretmez; "
-                    "yalnızca takip etmeye değer hisseleri ayrı gösterir."
-                )
-            with st.expander("Liste anlamları", expanded=False):
-                st.markdown(
-                    "- **Bugün Güçlü Sinyal:** Yükseliş puanı, göreli güç, veri geçmişi ve likidite birlikte olumlu; bugün detaylı incelenir.\n"
-                    "- **Teyit Bekleyenler:** Yükseliş ihtimali var ama göreli güç, hacim veya trend tarafında teyit eksik; 3-5 iş günü puan/grafik izlenir.\n"
-                    "- **Hareketli / Riskli:** Hissede hareket var ama oynaklık, zayıf teyit veya hızlı yükseliş riski yüksek; acele edilmez.\n"
-                    "- **Kendi Takibim:** Senin eklediğin hisseler; radara girmese bile sonucu kayda alınır.\n"
-                    "- **Sonuçlar:** Süresi dolan sinyallerin 5/10 iş günü sonra gerçekten tutup tutmadığını gösterir."
-                )
-
-            view_label_map = {
-                "Radar Listesi": "Tümü",
-                "Bugün Güçlü Sinyal": "Güçlü Aday",
-                "Teyit Bekleyenler": "Takip Edilecek",
-                "Hareketli / Riskli": "Riskli Ama Hareketli",
-                "Kendi Takibim": "Kendi Takibim",
-                "Sonuçlar": "Sonuçlar",
-            }
-            selected_label = st.pills(
-                "Liste",
-                list(view_label_map.keys()),
-                default="Radar Listesi",
-                selection_mode="single",
-            ) or "Radar Listesi"
-            view = view_label_map[selected_label]
-            if view == "Sonuçlar":
-                outcomes = ml_daily.load_outcomes()
-                render_outcomes_panel(outcomes)
-            elif view == "Kendi Takibim":
-                favs = set(cache.get_favorites())
-                show = radar_df[radar_df["Hisse"].isin(favs)].copy() if favs else radar_df.iloc[0:0]
-            else:
-                show = radar_df if view == "Tümü" else radar_df[radar_df["Radar Durumu"] == view]
-            if view != "Sonuçlar":
-                q_ml = st.text_input("Hisse ara", key="q_ml").strip().upper()
-                if q_ml:
-                    show = show[show["Hisse"].str.contains(q_ml)]
-                display_show = show.copy()
-                if "Radar Durumu" in display_show.columns:
-                    display_show["Radar Durumu"] = display_show["Radar Durumu"].replace({
-                        "Güçlü Aday": "Bugün Güçlü Sinyal",
-                        "Takip Edilecek": "Teyit Bekleyen",
-                        "Riskli Ama Hareketli": "Hareketli / Riskli",
-                    })
-                st.markdown(f"**{len(display_show)} aday** gösteriliyor. Satıra tıkla → açıklama ve grafik.")
-                render_radar_table(display_show, "tml")
+                _r_unlocked = True
+        if _r_unlocked:
+            _render_radar_tab()
 
 
 # --- Tab 3: Tüm Hisseler (son kapanış) ---
@@ -1292,57 +1352,63 @@ with tab3:
 # --- Favoriler ---
 with tab_fav:
     st.subheader("⭐ Favori hisseler")
-    favs = cache.get_favorites()
-    if not favs:
-        st.info("Henüz favori yok. Tablolarda bir satıra tıklayıp **☆ Favorile** "
-                "ile ekleyebilirsin.")
-    elif close_df.empty:
-        st.info("Veri yok. Kenar çubuğundan güncelleyin.")
+    if supabase_store.is_configured() and st.session_state.get("user") is None:
+        st.warning("🔐 Favorileri görmek için **kenar çubuğundan giriş yapın**.")
     else:
-        fav_show = close_df[close_df["symbol"].isin(favs)][
-            ["symbol", "ad", "son", "fark", "hacim_lot", "hacim_tl", "tarih"]].copy()
-        fav_show.columns = ["Sembol", "Ad", "Son", "Fark %", "Hacim (Lot)",
-                            "Hacim (TL)", "Tarih"]
-        render_table(fav_show, "tfav", chart_days=126)
+        favs = cache.get_favorites()
+        if not favs:
+            st.info("Henüz favori yok. Tablolarda bir satıra tıklayıp **☆ Favorile** "
+                    "ile ekleyebilirsin.")
+        elif close_df.empty:
+            st.info("Veri yok. Kenar çubuğundan güncelleyin.")
+        else:
+            fav_show = close_df[close_df["symbol"].isin(favs)][
+                ["symbol", "ad", "son", "fark", "hacim_lot", "hacim_tl", "tarih"]].copy()
+            fav_show.columns = ["Sembol", "Ad", "Son", "Fark %", "Hacim (Lot)",
+                                "Hacim (TL)", "Tarih"]
+            render_table(fav_show, "tfav", chart_days=126)
 
 
 # --- Notlar ---
 with tab_notes:
     st.subheader("📝 Notlar")
-    st.caption("İstediğin hisse için not bırak; tarihiyle kaydedilir ve aynı linke "
-               "giren herkes görür.")
-    notes = cache.get_notes()
-    syms_pool = set(cached_syms)
-    if not close_df.empty:
-        syms_pool |= set(close_df["symbol"])
-    note_syms = sorted(syms_pool)
-
-    sel = st.selectbox("Hisse seç", note_syms, key="note_sym") if note_syms else None
-    if sel:
-        cur = notes.get(sel, {})
-        txt = st.text_area("Not", value=cur.get("text", ""),
-                           key=f"note_txt_{sel}", height=110,
-                           placeholder="Bu hisse hakkında notun...")
-        c1, c2, _ = st.columns([1, 1, 3])
-        if c1.button("💾 Kaydet", key="note_save"):
-            if txt.strip():
-                cache.set_note(sel, txt.strip())
-            else:
-                cache.delete_note(sel)
-            bump_version()
-            st.rerun()
-        if cur and c2.button("🗑️ Sil", key="note_del"):
-            cache.delete_note(sel)
-            bump_version()
-            st.rerun()
-
-    st.divider()
-    if notes:
-        st.markdown(f"**Tüm notlar ({len(notes)}):**")
-        for sym in sorted(notes):
-            st.markdown(note_card_html(sym, notes[sym]), unsafe_allow_html=True)
+    if supabase_store.is_configured() and st.session_state.get("user") is None:
+        st.warning("🔐 Notları görmek için **kenar çubuğundan giriş yapın**.")
     else:
-        st.info("Henüz not yok. Yukarıdan bir hisse seçip not ekleyebilirsin.")
+        st.caption("İstediğin hisse için not bırak; tarihiyle kaydedilir ve aynı linke "
+                   "giren herkes görür.")
+        notes = cache.get_notes()
+        syms_pool = set(cached_syms)
+        if not close_df.empty:
+            syms_pool |= set(close_df["symbol"])
+        note_syms = sorted(syms_pool)
+
+        sel = st.selectbox("Hisse seç", note_syms, key="note_sym") if note_syms else None
+        if sel:
+            cur = notes.get(sel, {})
+            txt = st.text_area("Not", value=cur.get("text", ""),
+                               key=f"note_txt_{sel}", height=110,
+                               placeholder="Bu hisse hakkında notun...")
+            c1, c2, _ = st.columns([1, 1, 3])
+            if c1.button("💾 Kaydet", key="note_save"):
+                if txt.strip():
+                    cache.set_note(sel, txt.strip())
+                else:
+                    cache.delete_note(sel)
+                bump_version()
+                st.rerun()
+            if cur and c2.button("🗑️ Sil", key="note_del"):
+                cache.delete_note(sel)
+                bump_version()
+                st.rerun()
+
+        st.divider()
+        if notes:
+            st.markdown(f"**Tüm notlar ({len(notes)}):**")
+            for sym in sorted(notes):
+                st.markdown(note_card_html(sym, notes[sym]), unsafe_allow_html=True)
+        else:
+            st.info("Henüz not yok. Yukarıdan bir hisse seçip not ekleyebilirsin.")
 
 
 # --- Tab 4: Devre Dışı (kara liste) ---
