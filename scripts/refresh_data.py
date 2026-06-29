@@ -1,16 +1,14 @@
 """
 VPS gunluk veri guncelleme (cron'dan calisir).
 
-Akis: Is Yatirim'dan gunluk fiyat + aylik gecmisi ceker, yerel SQLite'i gunceller,
-VACUUM + gzip'ler ve Supabase Storage'a yukler. Yukleme icin "robot" maintainer
-hesabiyla giris yapilir (JWT) -> kovadaki maintainer-only yazma politikasi gecerli.
-Canli uygulama bu dosyayi acilista indirir; boylece veri elle mudahale olmadan taze kalir.
+Akis: Is Yatirim'dan gunluk fiyat (+ ay basinda aylik gecmis) ceker, yerel SQLite'i
+gunceller, VACUUM + gzip'ler ve Supabase Storage'a yukler. Yukleme service_role ile yapilir
+(VPS guvenilir arka-uc; anahtar root-only /etc/hisse.env'de, RLS baypas edilir).
+Canli uygulama bu dosyayi acilista indirir; veri elle mudahale olmadan taze kalir.
 
 Gerekli ortam degiskenleri (VPS'te root-only /etc/hisse.env):
   SUPABASE_URL          = https://<proje>.supabase.co
-  SUPABASE_ANON_KEY     = <anon public key>
-  BOT_EMAIL             = robot hesabinin e-postasi
-  BOT_PASSWORD          = robot hesabinin sifresi   (ASLA repoya/loga yazma)
+  SUPABASE_SERVICE_KEY  = <service_role secret>   (ASLA repoya/loga yazma)
 
 Calistirma (VPS):
   cd /root/bist-hisse-tarama && set -a && . /etc/hisse.env && set +a && ./venv/bin/python -m scripts.refresh_data
@@ -21,20 +19,45 @@ import shutil
 import sqlite3
 import sys
 import tempfile
-from datetime import datetime
+from datetime import date, datetime
+
+import requests
+
+STORAGE_BUCKET = "market-data"
+STORAGE_OBJECT = "cache.sqlite.gz"
 
 
 def log(*a):
     print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), *a, flush=True)
 
 
-def main():
-    for k in ("SUPABASE_URL", "SUPABASE_ANON_KEY", "BOT_EMAIL", "BOT_PASSWORD"):
-        if not os.environ.get(k):
-            log("EKSIK ortam degiskeni:", k)
-            sys.exit(1)
+def _upload_service(gz_bytes, url, service_key):
+    """Storage'a service_role ile yukler (RLS baypas). Basari None, aksi halde hata metni."""
+    try:
+        r = requests.post(
+            f"{url}/storage/v1/object/{STORAGE_BUCKET}/{STORAGE_OBJECT}",
+            headers={
+                "apikey": service_key,
+                "Authorization": f"Bearer {service_key}",
+                "Content-Type": "application/gzip",
+                "x-upsert": "true",
+            },
+            data=gz_bytes,
+            timeout=120,
+        )
+        return None if r.ok else f"HTTP {r.status_code}: {r.text[:300]}"
+    except Exception as e:
+        return str(e)
 
-    from data import cache, fetch, universe, supabase_store
+
+def main():
+    url = os.environ.get("SUPABASE_URL")
+    service_key = os.environ.get("SUPABASE_SERVICE_KEY")
+    if not (url and service_key):
+        log("EKSIK ortam degiskeni: SUPABASE_URL / SUPABASE_SERVICE_KEY")
+        sys.exit(1)
+
+    from data import cache, fetch, universe
 
     # 1) Sembol listesi + isimler (mynet)
     try:
@@ -53,25 +76,24 @@ def main():
         log("sembol yok; cikiliyor")
         sys.exit(1)
 
-    # 2) Gunluk fiyat (artimli) + aylik gecmis
+    # 2) Gunluk fiyat (artimli, her gun)
     total, errs = fetch.update_all(symbols, names=names, full=False)
     log(f"gunluk: +{total} satir, {len(errs)} hata")
-    mtotal, merrs = fetch.update_monthly(symbols)
-    log(f"aylik: +{mtotal} satir, {len(merrs)} hata")
 
-    # 3) Veri-kalitesi kapisi (bozuk/eksik veri iyi asset'i ezmesin)
+    # 3) Aylik gecmis: sadece ay basinda (1-5) yenile (her gun 611 istek israfini onler)
+    if date.today().day <= 5:
+        mtotal, merrs = fetch.update_monthly(symbols)
+        log(f"aylik: +{mtotal} satir, {len(merrs)} hata (ay basi yenilemesi)")
+    else:
+        log("aylik: atlandi (ay basi degil)")
+
+    # 4) Veri-kalitesi kapisi (bozuk/eksik veri iyi asset'i ezmesin)
     nsym = len(cache.symbols_in_cache())
     if nsym < 100 or len(errs) > 0.2 * max(nsym, 1):
-        log(f"KALITE DUSUK (sym={nsym}, err={len(errs)}); UPLOAD ATLANDI")
+        log(f"KALITE DUSUK (sym={nsym}, gunluk_err={len(errs)}); UPLOAD ATLANDI")
         sys.exit(2)
 
-    # 4) Robot hesabiyla giris -> JWT
-    user, sess, err = supabase_store.login(os.environ["BOT_EMAIL"], os.environ["BOT_PASSWORD"])
-    if err or not sess:
-        log("LOGIN HATA:", err)
-        sys.exit(3)
-
-    # 5) VACUUM + gzip + Storage upload
+    # 5) VACUUM + gzip + Storage upload (service_role)
     src = cache._work_path()
     tmp = os.path.join(tempfile.gettempdir(), "_refresh_upload.sqlite")
     try:
@@ -87,7 +109,7 @@ def main():
         except Exception:
             pass
     log(f"gzip boyut: {len(gz) // 1024} KB")
-    uerr = supabase_store.storage_upload(gz, sess.access_token)
+    uerr = _upload_service(gz, url, service_key)
     if uerr:
         log("UPLOAD HATA:", uerr)
         sys.exit(4)
