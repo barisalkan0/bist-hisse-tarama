@@ -29,13 +29,19 @@ MCP project id: `C-Users-asus-OneDrive-Masa-st-ahin-hisse-takip`
 - `tests/test_ml_signals.py` covers ML feature leakage, labels, missing model behavior, radar text, snapshot/outcome behavior.
 - `supabase/schema.sql` NEW: SQL to run in Supabase SQL Editor to create subscriptions/notes/favorites/blacklist tables.
 
-## Auth + Subscription Gate (Implemented 2026-06-29)
-- Sidebar shows login form when Supabase is configured and user is not logged in.
-- Radar tab: gated behind `is_pro()` check (requires active pro subscription row in Supabase `subscriptions` table).
-- Favoriler tab: gated behind login (any account, no subscription required).
-- Notlar tab: gated behind login (any account, no subscription required).
+## Auth + Subscription Gate (Updated 2026-06-29)
+- Sidebar shows login form + signup form when Supabase is configured and user is not logged in.
+- Radar tab AND Favoriler/Notlar/Devre Dışı: ALL gated behind `is_pro()` (Pro-only). Free/anonymous users do not see favorite/note/blacklist UI at all.
+- `is_pro()` computed once per render via `_is_pro_now()` helper in app.py, cached in `st.session_state["_pro_now"]`; cache cleared on login/logout.
 - If Supabase is NOT configured (SUPABASE_URL / SUPABASE_ANON_KEY missing): app runs in anonymous mode — all tabs visible, backwards compatible with local dev.
-- Notes/favorites/blacklist data: still stored in local SQLite + Upstash Redis (per-user Supabase migration is a future step).
+- Data ops (favorites/notes/blacklist/is_pro) use direct Supabase REST API with JWT in Authorization header (NOT supabase-py set_session, which silently failed to authenticate PostgREST).
+- ROOT CAUSE of earlier "favorites not saving" was deployment lag: REST rewrite existed only locally; live repo (last commit d9fc55f, 2026-06-28) still ran old set_session code.
+
+## Per-user Data Layer (Implemented 2026-06-29)
+- `data/supabase_store.py` has per-user CRUD: `fav_list/add/remove`, `note_all/set/delete`, `blacklist_list/add/remove`, `signup`.
+- `app.py` has thin wrapper helpers (`_get_favs`, `_add_fav`, `_remove_fav`, `_get_notes`, `_set_note`, `_delete_note`, `_get_blacklist`, `_add_blacklist`, `_remove_blacklist`) that route to Supabase if user logged in, else fall back to local SQLite/Upstash.
+- All call sites in `app.py` (render_table, _row_detail, _render_radar_tab, tabs) use these wrappers.
+- Supabase tables used: `favorites(user_id, symbol)`, `notes(user_id, symbol, note_text, updated_at)`, `blacklist(user_id, symbol)` — all with RLS.
 
 ## Supabase DB Schema (supabase/schema.sql)
 - `subscriptions(user_id, provider, provider_customer_id, provider_subscription_id, plan, status, current_period_end)` — provider-agnostic design.
@@ -55,12 +61,11 @@ MCP project id: `C-Users-asus-OneDrive-Masa-st-ahin-hisse-takip`
 - Static review confirmed note-card HTML escapes user note text before `unsafe_allow_html=True` rendering.
 
 ## Active Work / Next Steps
-1. User creates Supabase project and runs `supabase/schema.sql`.
-2. Add `SUPABASE_URL` and `SUPABASE_ANON_KEY` to Streamlit secrets.
-3. Install `supabase>=2.0` (`pip install supabase` / `requirements.txt` updated).
-4. Test auth flow: login, logout, subscription gate.
-5. Future: migrate notes/favorites/blacklist to per-user Supabase tables.
-6. Future: choose payment provider, implement webhook, add legal pages.
+1. ✅ Supabase project created, schema.sql run, secrets configured, auth tested.
+2. ✅ Per-user favorites/notes/blacklist wired to Supabase.
+3. ✅ Signup form added to sidebar.
+4. Next: choose payment provider (iyzico / Stripe / Paddle), implement webhook, add legal pages (/pricing, /terms, /privacy, /refunds).
+5. Future: email templates in Supabase (kayıt onay e-postası Türkçeleştirme).
 
 ## Known Constraints and Risks
 - Financial/regulatory risk is high: app must not imply guaranteed returns or investment advice.
@@ -79,4 +84,4 @@ MCP project id: `C-Users-asus-OneDrive-Masa-st-ahin-hisse-takip`
 
 ## Recent Changes
 - 2026-06-28: Added Claude/Codex project memory workflow, security notes, and MCP project indexing.
-- 2026-06-29: Implemented Supabase auth layer (`data/supabase_store.py`), sidebar login form, Radar tab subscription gate, Favoriler/Notlar login gates, `supabase/schema.sql`, and `supabase>=2.0` in requirements.txt.
+- 2026-06-29: Implemented Supabase auth layer (`data/supabase_store.py`), sidebar login form + signup form, Radar tab subscription gate, Favoriler/Notlar/Devre Dışı login gates, per-user favorites/notes/blacklist via Supabase CRUD, `supabase/schema.sql`, and `supabase>=2.0` in requirements.txt.

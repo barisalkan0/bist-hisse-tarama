@@ -294,7 +294,6 @@ if "boot" not in st.session_state:
             refresh_snapshot()   # yalnızca sembol listesi + isimler için
         except Exception:
             pass  # liste alınamazsa önbellekteki sembollerle devam
-    maybe_auto_update()
     st.session_state["boot"] = True
     bump_version()
 
@@ -384,7 +383,7 @@ def render_table(df, key, fixed=("Sembol",), chart_days=126, height=None):
     nonce = st.session_state.get(f"nonce_{key}", 0)
     skey = f"tbl_{key}_{nonce}"
 
-    favs = set(cache.get_favorites())
+    favs = set(_get_favs())
     df = df.reset_index(drop=True)
     if "Sembol" in df.columns and favs:
         df = (df.assign(_f=df["Sembol"].isin(favs))
@@ -476,18 +475,24 @@ with st.sidebar:
         _sb_user = st.session_state.get("user")
         if _sb_user:
             st.caption(f"👤 **{_sb_user['email']}**")
-            _is_pro = supabase_store.is_pro(
-                _sb_user["id"],
-                st.session_state.get("access_token", ""),
-                st.session_state.get("refresh_token", ""),
-            )
-            if _is_pro:
+            if "_pro_now" not in st.session_state:
+                st.session_state["_pro_now"] = supabase_store.is_pro(
+                    _sb_user["id"], st.session_state.get("access_token", ""))
+            if st.session_state["_pro_now"]:
                 st.caption("✅ Pro abonelik aktif")
             else:
-                st.caption("🔓 Ücretsiz hesap — Akıllı Radar Pro gerektirir")
+                st.caption("🔓 Ücretsiz hesap — Favoriler, Notlar ve Akıllı Radar Pro gerektirir")
+            with st.expander("🔧 Teşhis (geçici)"):
+                _diag_at = st.session_state.get("access_token", "")
+                st.write("configured:", supabase_store.is_configured())
+                st.write("token var:", bool(_diag_at), "uzunluk:", len(_diag_at))
+                st.write("user id:", _sb_user["id"])
+                if st.button("Supabase yazma testi", key="diag_write"):
+                    _derr = supabase_store.fav_add(_sb_user["id"], "_TEST_", _diag_at)
+                    st.write("sonuç:", _derr or "OK (HTTP 2xx)")
             if st.button("Çıkış yap", key="auth_logout", width="stretch"):
                 supabase_store.logout()
-                for _k in ("user", "access_token", "refresh_token"):
+                for _k in ("user", "access_token", "refresh_token", "_pro_now"):
                     st.session_state.pop(_k, None)
                 st.rerun()
         else:
@@ -503,7 +508,20 @@ with st.sidebar:
                             st.session_state["user"] = _u
                             st.session_state["access_token"] = _sess.access_token
                             st.session_state["refresh_token"] = _sess.refresh_token
+                            st.session_state.pop("_pro_now", None)
                             st.rerun()
+                    else:
+                        st.warning("E-posta ve şifre girin.")
+            with st.expander("📝 Kayıt ol"):
+                _reg_email = st.text_input("E-posta", key="reg_email")
+                _reg_pw = st.text_input("Şifre (en az 6 karakter)", type="password", key="reg_pw")
+                if st.button("Kayıt ol", key="reg_btn", width="stretch"):
+                    if _reg_email and _reg_pw:
+                        _reg_err = supabase_store.signup(_reg_email, _reg_pw)
+                        if _reg_err:
+                            st.error(_reg_err)
+                        else:
+                            st.success("Kayıt başarılı! E-postanızı onaylayın, ardından giriş yapın.")
                     else:
                         st.warning("E-posta ve şifre girin.")
     else:
@@ -855,6 +873,132 @@ def _radar_follow_text(row):
     return "5-10 iş günü içinde puanın güçlenip güçlenmediğini izle."
 
 
+# ----------------------------------------------------------------------------
+# Veri erişim katmanı: Supabase (giriş yapılmışsa) veya yerel SQLite/Upstash
+# ----------------------------------------------------------------------------
+def _active_user():
+    return st.session_state.get("user")
+
+
+def _tokens():
+    return st.session_state.get("access_token", ""), st.session_state.get("refresh_token", "")
+
+
+def _is_pro_now() -> bool:
+    """Aktif kullanıcı Pro mu? Render başına bir kez hesaplanır (session_state'te önbellek)."""
+    if not supabase_store.is_configured():
+        return False  # yerel/anon mod → kapı yok (geriye dönük uyum)
+    user = _active_user()
+    if not user:
+        return False
+    if "_pro_now" not in st.session_state:
+        at, _ = _tokens()
+        st.session_state["_pro_now"] = supabase_store.is_pro(user["id"], at)
+    return st.session_state["_pro_now"]
+
+
+def _get_favs() -> list:
+    user = _active_user()
+    if supabase_store.is_configured():
+        if user:
+            at, rt = _tokens()
+            return supabase_store.fav_list(user["id"], at, rt)
+        return []
+    return cache.get_favorites()
+
+
+def _add_fav(sym: str) -> None:
+    user = _active_user()
+    if supabase_store.is_configured():
+        if user:
+            at, rt = _tokens()
+            err = supabase_store.fav_add(user["id"], sym, at, rt)
+            if err:
+                st.session_state["_sb_err"] = f"Favori kaydedilemedi: {err}"
+    else:
+        cache.add_favorite(sym)
+
+
+def _remove_fav(sym: str) -> None:
+    user = _active_user()
+    if supabase_store.is_configured():
+        if user:
+            at, rt = _tokens()
+            err = supabase_store.fav_remove(user["id"], sym, at, rt)
+            if err:
+                st.session_state["_sb_err"] = f"Favori silinemedi: {err}"
+    else:
+        cache.remove_favorite(sym)
+
+
+def _get_notes() -> dict:
+    user = _active_user()
+    if supabase_store.is_configured():
+        if user:
+            at, rt = _tokens()
+            return supabase_store.note_all(user["id"], at, rt)
+        return {}
+    return cache.get_notes()
+
+
+def _set_note(sym: str, text: str) -> None:
+    user = _active_user()
+    if supabase_store.is_configured():
+        if user:
+            at, rt = _tokens()
+            err = supabase_store.note_set(user["id"], sym, text, at, rt)
+            if err:
+                st.session_state["_sb_err"] = f"Not kaydedilemedi: {err}"
+    else:
+        cache.set_note(sym, text)
+
+
+def _delete_note(sym: str) -> None:
+    user = _active_user()
+    if supabase_store.is_configured():
+        if user:
+            at, rt = _tokens()
+            err = supabase_store.note_delete(user["id"], sym, at, rt)
+            if err:
+                st.session_state["_sb_err"] = f"Not silinemedi: {err}"
+    else:
+        cache.delete_note(sym)
+
+
+def _get_blacklist() -> list:
+    user = _active_user()
+    if supabase_store.is_configured():
+        if user:
+            at, rt = _tokens()
+            return supabase_store.blacklist_list(user["id"], at, rt)
+        return []
+    return cache.get_blacklist()
+
+
+def _add_blacklist(sym: str) -> None:
+    user = _active_user()
+    if supabase_store.is_configured():
+        if user:
+            at, rt = _tokens()
+            err = supabase_store.blacklist_add(user["id"], sym, at, rt)
+            if err:
+                st.session_state["_sb_err"] = f"Gizleme kaydedilemedi: {err}"
+    else:
+        cache.add_blacklist(sym)
+
+
+def _remove_blacklist(sym: str) -> None:
+    user = _active_user()
+    if supabase_store.is_configured():
+        if user:
+            at, rt = _tokens()
+            err = supabase_store.blacklist_remove(user["id"], sym, at, rt)
+            if err:
+                st.session_state["_sb_err"] = f"Gizleme kaldırılamadı: {err}"
+    else:
+        cache.remove_blacklist(sym)
+
+
 def _clear_selection(key):
     """Aksiyon sonrası tablo seçimini sıfırla (nonce'u artırarak yeni widget)."""
     st.session_state[f"nonce_{key}"] = st.session_state.get(f"nonce_{key}", 0) + 1
@@ -862,37 +1006,48 @@ def _clear_selection(key):
 
 def _row_detail(sym, key, chart_days):
     """Seçili hisse paneli: favori aç/kapa, gizle, not (tarihli), grafik."""
-    favs = set(cache.get_favorites())
-    notes = cache.get_notes()
+    _sb_mode = supabase_store.is_configured()
+    _logged_in = _active_user() is not None
+    _can_use = (not _sb_mode) or _is_pro_now()
+
+    favs = set(_get_favs())
+    notes = _get_notes()
     is_fav = sym in favs
     st.markdown(f"### {'⭐ ' if is_fav else ''}{sym}")
-    b1, b2 = st.columns(2)
-    if b1.button("★ Favoriden çıkar" if is_fav else "☆ Favorile",
-                 key=f"favbtn_{key}", width="stretch"):
-        cache.remove_favorite(sym) if is_fav else cache.add_favorite(sym)
-        _clear_selection(key)
-        bump_version()
-        st.rerun()
-    if b2.button("🚫 Gizle (kara liste)", key=f"hidebtn_{key}", width="stretch"):
-        cache.add_blacklist(sym)
-        _clear_selection(key)
-        bump_version()
-        st.rerun()
 
-    cur = notes.get(sym, {})
-    txt = st.text_area("📝 Not", value=cur.get("text", ""),
-                       key=f"note_{key}_{sym}", height=80,
-                       placeholder="Bu hisse için notun...")
-    if st.button("💾 Notu kaydet", key=f"notesave_{key}"):
-        if txt.strip():
-            cache.set_note(sym, txt.strip())
+    if not _can_use:
+        if not _logged_in:
+            st.caption("🔐 Favori ve not **Pro üyelere özel** — kenar çubuğundan giriş yapın.")
         else:
-            cache.delete_note(sym)
-        _clear_selection(key)
-        bump_version()
-        st.rerun()
-    if cur.get("date"):
-        st.caption(f"📝 Not tarihi: {cur['date']}")
+            st.caption("🔒 Favori ve not **Pro abonelik** gerektirir.")
+    else:
+        b1, b2 = st.columns(2)
+        if b1.button("★ Favoriden çıkar" if is_fav else "☆ Favorile",
+                     key=f"favbtn_{key}", width="stretch"):
+            _remove_fav(sym) if is_fav else _add_fav(sym)
+            _clear_selection(key)
+            bump_version()
+            st.rerun()
+        if b2.button("🚫 Gizle (kara liste)", key=f"hidebtn_{key}", width="stretch"):
+            _add_blacklist(sym)
+            _clear_selection(key)
+            bump_version()
+            st.rerun()
+
+        cur = notes.get(sym, {})
+        txt = st.text_area("📝 Not", value=cur.get("text", ""),
+                           key=f"note_{key}_{sym}", height=80,
+                           placeholder="Bu hisse için notun...")
+        if st.button("💾 Notu kaydet", key=f"notesave_{key}"):
+            if txt.strip():
+                _set_note(sym, txt.strip())
+            else:
+                _delete_note(sym)
+            _clear_selection(key)
+            bump_version()
+            st.rerun()
+        if cur.get("date"):
+            st.caption(f"📝 Not tarihi: {cur['date']}")
 
     price_volume_chart(sym, chart_days)
 
@@ -903,7 +1058,7 @@ def _row_detail(sym, key, chart_days):
 def _render_radar_tab():
     """Akıllı Radar sekme içeriği — sadece pro kullanıcılar görür."""
     with st.expander("Kendi takip listem", expanded=False):
-        favs_now = cache.get_favorites()
+        favs_now = _get_favs()
         syms_pool = set(cached_syms)
         if not close_df.empty:
             syms_pool |= set(close_df["symbol"])
@@ -911,23 +1066,23 @@ def _render_radar_tab():
         add_watch = st.multiselect("Takibe eklenecek hisse", addable, key="radar_watch_add")
         if st.button("Takibe ekle", key="radar_watch_add_btn") and add_watch:
             for s in add_watch:
-                cache.add_favorite(s)
+                _add_fav(s)
             bump_version()
             st.rerun()
-        favs_now = cache.get_favorites()
+        favs_now = _get_favs()
         if favs_now:
             st.caption("Takipteki hisseler:")
             for s in favs_now:
                 c1, c2 = st.columns([4, 1])
                 c1.write(s)
                 if c2.button("Çıkar", key=f"radar_watch_remove_{s}"):
-                    cache.remove_favorite(s)
+                    _remove_fav(s)
                     bump_version()
                     st.rerun()
         else:
             st.caption("Henüz takip listene eklenmiş hisse yok.")
 
-    favs_now = cache.get_favorites()
+    favs_now = _get_favs()
     radar_df, radar_err, radar_info = ml_daily.today_radar(
         data, snapshot=son_map, fark=fark_map, data_date=gmax, watch_symbols=favs_now
     )
@@ -997,7 +1152,7 @@ def _render_radar_tab():
             outcomes = ml_daily.load_outcomes()
             render_outcomes_panel(outcomes)
         elif view == "Kendi Takibim":
-            favs = set(cache.get_favorites())
+            favs = set(_get_favs())
             show = radar_df[radar_df["Hisse"].isin(favs)].copy() if favs else radar_df.iloc[0:0]
         else:
             show = radar_df if view == "Tümü" else radar_df[radar_df["Radar Durumu"] == view]
@@ -1016,6 +1171,10 @@ def _render_radar_tab():
             render_radar_table(display_show, "tml")
 
 
+# Supabase yazma hatası varsa bir sonraki render'da göster
+if "_sb_err" in st.session_state:
+    st.error(st.session_state.pop("_sb_err"))
+
 # ----------------------------------------------------------------------------
 # Sekmeler
 # ----------------------------------------------------------------------------
@@ -1033,7 +1192,7 @@ with tab_summary:
     if close_df.empty:
         st.info("Veri yok. Kenar çubuğundan güncelleyin.")
     else:
-        favs_s = set(cache.get_favorites())
+        favs_s = set(_get_favs())
         d = close_df.dropna(subset=["fark"])
         mc = st.columns(3)
         mc[0].metric("📈 Yükselen", int((d["fark"] > 0).sum()))
@@ -1318,11 +1477,7 @@ with tab_ml:
             if _r_user is None:
                 st.warning("🔐 Bu özelliği görmek için **kenar çubuğundan giriş yapın**.")
                 st.caption("Akıllı Radar Pro abonelik gerektirir. Kenar çubuğundaki 'Giriş yap' bölümünü kullanın.")
-            elif not supabase_store.is_pro(
-                _r_user["id"],
-                st.session_state.get("access_token", ""),
-                st.session_state.get("refresh_token", ""),
-            ):
+            elif not _is_pro_now():
                 st.warning("🔒 **Akıllı Radar Pro abonelik gerektirir.**")
                 st.caption("Pro plana geçerek tüm radar özelliklerini açabilirsiniz.")
             else:
@@ -1352,10 +1507,13 @@ with tab3:
 # --- Favoriler ---
 with tab_fav:
     st.subheader("⭐ Favori hisseler")
-    if supabase_store.is_configured() and st.session_state.get("user") is None:
-        st.warning("🔐 Favorileri görmek için **kenar çubuğundan giriş yapın**.")
+    if supabase_store.is_configured() and not _is_pro_now():
+        if _active_user() is None:
+            st.warning("🔐 Favoriler **Pro üyelere özel** — kenar çubuğundan giriş yapın.")
+        else:
+            st.warning("🔒 Favoriler **Pro abonelik** gerektirir.")
     else:
-        favs = cache.get_favorites()
+        favs = _get_favs()
         if not favs:
             st.info("Henüz favori yok. Tablolarda bir satıra tıklayıp **☆ Favorile** "
                     "ile ekleyebilirsin.")
@@ -1372,12 +1530,14 @@ with tab_fav:
 # --- Notlar ---
 with tab_notes:
     st.subheader("📝 Notlar")
-    if supabase_store.is_configured() and st.session_state.get("user") is None:
-        st.warning("🔐 Notları görmek için **kenar çubuğundan giriş yapın**.")
+    if supabase_store.is_configured() and not _is_pro_now():
+        if _active_user() is None:
+            st.warning("🔐 Notlar **Pro üyelere özel** — kenar çubuğundan giriş yapın.")
+        else:
+            st.warning("🔒 Notlar **Pro abonelik** gerektirir.")
     else:
-        st.caption("İstediğin hisse için not bırak; tarihiyle kaydedilir ve aynı linke "
-                   "giren herkes görür.")
-        notes = cache.get_notes()
+        st.caption("İstediğin hisse için not bırak; tarihiyle kaydedilir.")
+        notes = _get_notes()
         syms_pool = set(cached_syms)
         if not close_df.empty:
             syms_pool |= set(close_df["symbol"])
@@ -1392,13 +1552,13 @@ with tab_notes:
             c1, c2, _ = st.columns([1, 1, 3])
             if c1.button("💾 Kaydet", key="note_save"):
                 if txt.strip():
-                    cache.set_note(sel, txt.strip())
+                    _set_note(sel, txt.strip())
                 else:
-                    cache.delete_note(sel)
+                    _delete_note(sel)
                 bump_version()
                 st.rerun()
             if cur and c2.button("🗑️ Sil", key="note_del"):
-                cache.delete_note(sel)
+                _delete_note(sel)
                 bump_version()
                 st.rerun()
 
@@ -1414,29 +1574,35 @@ with tab_notes:
 # --- Tab 4: Devre Dışı (kara liste) ---
 with tab4:
     st.subheader("Devre dışı bırakılan hisseler")
-    st.caption("Buradaki hisseler taramalarda gösterilmez.")
-    black = cache.get_blacklist()
-    base_syms = set(cached_syms)
-    if not close_df.empty:
-        base_syms |= set(close_df["symbol"])
-    all_syms = sorted(base_syms)
-
-    add = st.multiselect("Gizlenecek hisse ekle", [s for s in all_syms if s not in black])
-    if st.button("Eklenenleri gizle") and add:
-        for s in add:
-            cache.add_blacklist(s)
-        bump_version()
-        st.rerun()
-
-    st.divider()
-    if black:
-        st.markdown("**Şu an gizli olanlar:**")
-        for s in black:
-            col1, col2 = st.columns([4, 1])
-            col1.write(s)
-            if col2.button("Geri al", key=f"un_{s}"):
-                cache.remove_blacklist(s)
-                bump_version()
-                st.rerun()
+    if supabase_store.is_configured() and not _is_pro_now():
+        if _active_user() is None:
+            st.warning("🔐 Gizleme listesi **Pro üyelere özel** — kenar çubuğundan giriş yapın.")
+        else:
+            st.warning("🔒 Gizleme listesi **Pro abonelik** gerektirir.")
     else:
-        st.info("Gizlenen hisse yok.")
+        st.caption("Buradaki hisseler taramalarda gösterilmez.")
+        black = _get_blacklist()
+        base_syms = set(cached_syms)
+        if not close_df.empty:
+            base_syms |= set(close_df["symbol"])
+        all_syms = sorted(base_syms)
+
+        add = st.multiselect("Gizlenecek hisse ekle", [s for s in all_syms if s not in black])
+        if st.button("Eklenenleri gizle") and add:
+            for s in add:
+                _add_blacklist(s)
+            bump_version()
+            st.rerun()
+
+        st.divider()
+        if black:
+            st.markdown("**Şu an gizli olanlar:**")
+            for s in black:
+                col1, col2 = st.columns([4, 1])
+                col1.write(s)
+                if col2.button("Geri al", key=f"un_{s}"):
+                    _remove_blacklist(s)
+                    bump_version()
+                    st.rerun()
+        else:
+            st.info("Gizlenen hisse yok.")
