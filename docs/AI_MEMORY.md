@@ -48,6 +48,13 @@ MCP project id: `C-Users-asus-OneDrive-Masa-st-ahin-hisse-takip`
 - `notes(user_id, symbol, note_text)`, `favorites(user_id, symbol)`, `blacklist(user_id, symbol)` — all with RLS.
 - Manual subscription rows can be added via Supabase dashboard to test pro access.
 
+## Data Pipeline + Persistence (VPS) (2026-06-29)
+- Is Yatirim blocks foreign datacenter IPs (GitHub Actions Azure → ConnectTimeout, proven). Streamlit Cloud IP is allowed.
+- A Turkish VPS (Istanbul) runs `scripts/refresh_data.py` daily via cron (weekdays 19:00 TRT): fetches EOD prices (+ monthly on days 1-5), updates SQLite, VACUUM+gzip, uploads to Supabase Storage bucket `market-data/cache.sqlite.gz`.
+- Live app downloads that public asset on boot (`cache.py::_try_storage_download`) → falls back to committed seed on any failure. Keeps data fresh with no visits/logins.
+- Storage write uses the **Supabase service_role key** stored ONLY in a root-only env file on the VPS (never in repo/logs). Reason: robot-account RLS write policy did not work in Storage context (auth.uid() unresolved); service_role bypasses RLS and is the standard backend approach.
+- Storage bucket is public-READ (market data is non-sensitive); write is effectively service_role-only.
+
 ## Payment (Not Implemented Yet)
 - Provider not confirmed (Paddle, Stripe, or Iyzico).
 - DB schema is provider-agnostic (provider + provider_subscription_id columns).
@@ -61,18 +68,18 @@ MCP project id: `C-Users-asus-OneDrive-Masa-st-ahin-hisse-takip`
 - Static review confirmed note-card HTML escapes user note text before `unsafe_allow_html=True` rendering.
 
 ## Active Work / Next Steps
-1. ✅ Supabase project created, schema.sql run, secrets configured, auth tested.
-2. ✅ Per-user favorites/notes/blacklist wired to Supabase.
-3. ✅ Signup form added to sidebar.
-4. Next: choose payment provider (iyzico / Stripe / Paddle), implement webhook, add legal pages (/pricing, /terms, /privacy, /refunds).
-5. Future: email templates in Supabase (kayıt onay e-postası Türkçeleştirme).
+1. ✅ Supabase auth + per-user favorites/notes/blacklist live; Pro-only gating for those features.
+2. ✅ Automatic daily data pipeline live (Turkish VPS cron → Supabase Storage → app downloads).
+3. Planned migration OFF Streamlit to own domain: Phase 2 = Next.js frontend on own domain (reads Supabase); Phase 3 = payment (iyzico/Paddle) + legal pages. Heavy data/ML stays on the VPS.
+4. Future: email templates in Supabase (Türkçe kayıt onayı); test account isolation with 2 users.
 
 ## Known Constraints and Risks
 - Financial/regulatory risk is high: app must not imply guaranteed returns or investment advice.
 - Supabase gate is NOT enabled in local dev (or when secrets missing) — full access for backwards compat.
-- Notes/favorites/blacklist currently shared (SQLite + Upstash) — no per-user isolation yet.
+- Per-user isolation IS implemented (favorites/notes/blacklist via Supabase RLS, user_id=auth.uid()); not yet stress-tested with 2 live accounts.
+- Service_role key now lives on the VPS (root-only env). It bypasses ALL RLS → high-value secret; VPS is a new attack surface (keep SSH hardened; never put the key in repo/logs).
+- Streamlit Community Cloud /tmp is ephemeral; durability now comes from the VPS→Storage pipeline, not the runtime FS.
 - Upstash keys are secret-bearing; never write their values into docs, prompts, logs, or memory.
-- Streamlit Community Cloud/runtime filesystem is not a durable database.
 - Dependency versions are minimum ranges, not locked exact versions.
 
 ## Security Status
@@ -85,3 +92,4 @@ MCP project id: `C-Users-asus-OneDrive-Masa-st-ahin-hisse-takip`
 ## Recent Changes
 - 2026-06-28: Added Claude/Codex project memory workflow, security notes, and MCP project indexing.
 - 2026-06-29: Implemented Supabase auth layer (`data/supabase_store.py`), sidebar login form + signup form, Radar tab subscription gate, Favoriler/Notlar/Devre Dışı login gates, per-user favorites/notes/blacklist via Supabase CRUD, `supabase/schema.sql`, and `supabase>=2.0` in requirements.txt.
+- 2026-06-29 (later): Deployed live. Favorites/notes/blacklist now Pro-only (`_is_pro_now()`), per-user via direct Supabase REST + JWT. Performance fixes (removed `bump_version()` from fav/note actions; memoized Supabase reads with login/logout/write invalidation; gated `evaluate_outcomes` once/day). Notlar three-dot edit/delete menu. Added Supabase Storage persistence + Turkish VPS daily cron pipeline (`scripts/refresh_data.py`, `supabase/storage_policies.sql`). Started planning migration off Streamlit to own domain (VPS data layer + Supabase + Next.js).

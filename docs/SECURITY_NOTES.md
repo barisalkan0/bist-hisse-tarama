@@ -1,7 +1,7 @@
 # Security Notes
 
 Security risk level: high-risk
-Last reviewed: 2026-06-28
+Last reviewed: 2026-06-29
 
 ## Why This Repo Is High-Risk
 - It is a financial-market decision-support app that can influence investment behavior.
@@ -12,11 +12,12 @@ Last reviewed: 2026-06-28
 
 ## Sensitive Areas
 - Financial output language: all radar/screener output must remain candidate/watch/risk/decision-support wording, not buy/sell advice.
-- Secrets: Upstash REST URL/token, future DB URLs, payment secrets, webhook secrets, auth provider secrets.
-- User data: notes, favorites, disabled symbols, future account/subscription state, future payment/customer identifiers.
-- Persistence: current SQLite cache is local/runtime; Upstash stores shared blacklist/favorites/notes keys without per-user isolation.
+- Secrets: Supabase URL/anon key (semi-public), **Supabase service_role key (now on the data VPS, root-only env)** — service_role BYPASSES all RLS = full DB access; highest-value secret. Also Upstash REST URL/token, future payment/webhook secrets.
+- Infrastructure: a Turkish VPS now runs the daily data pipeline and holds the service_role key. New attack surface — keep SSH hardened (ufw + fail2ban set up; SSH key-auth + disable root password login still recommended). Root password was once exposed in a shared screenshot and was changed.
+- User data: per-user notes/favorites/disabled symbols (Supabase, RLS by user_id), account/subscription state, future payment/customer identifiers. Auth emails are PII.
+- Persistence: durable data file (`cache.sqlite.gz`) in Supabase Storage bucket `market-data` — public READ (non-sensitive market data), write effectively service_role-only. Local SQLite cache is runtime-only.
 - ML/model integrity: `ml_signals/model.joblib`, backtest report, model kind, radar snapshots/outcomes.
-- External data: Is Yatirim and Mynet endpoints may change, fail, rate-limit, or raise licensing/terms questions.
+- External data: Is Yatirim and Mynet endpoints may change, fail, rate-limit, or raise licensing/terms questions. Daily VPS cron adds repeated load on Is Yatirim (monthly throttled to days 1-5 to reduce request volume).
 
 ## Verified From Source
 - `data/store.py` reads Upstash credentials from environment or Streamlit secrets and does not print token values.
@@ -60,7 +61,11 @@ Last reviewed: 2026-06-28
 | 2026-06-28 | MCP memory | Repo indexed | Verified | Project id `C-Users-asus-OneDrive-Masa-st-ahin-hisse-takip` |
 | 2026-06-29 | Auth gate | Supabase login + subscription gate code review | Partially verified | `data/supabase_store.py` reads secrets, never prints values; is_pro() checks plan='pro' AND status='active' AND period_end server-side; gate degrades gracefully when Supabase not configured |
 | 2026-06-29 | Tests | Unit tests after auth changes | Passed | 8/8 tests OK, app.py syntax OK |
-| 2026-06-29 | Launch security | Subscription/database/auth production readiness | Not verified yet | Supabase project not yet created; no live test performed |
+| 2026-06-29 | Auth | Live login + Pro gate on real Supabase | Verified working | login/logout/signup work live; Pro account unlocks Radar; favorites/notes Pro-only |
+| 2026-06-29 | Per-user data | Favorites/notes/blacklist write to Supabase per user | Verified working | RLS user_id=auth.uid(); session-cache invalidated on login/logout to avoid cross-user leak. NOT yet stress-tested with 2 concurrent live accounts |
+| 2026-06-29 | Storage | Bucket public-read + restricted write | Partially verified | `market-data` public read = HTTP 200; write works via service_role from VPS; robot-uuid RLS write policy did NOT take effect (auth.uid() unresolved in Storage context) |
+| 2026-06-29 | Secret handling | service_role key placement | Verified placement | Stored only in root-only `/etc/hisse.env` on the VPS; not in repo/logs/docs. VPS SSH: ufw+fail2ban on; key-auth + root-login-disable still pending |
+| 2026-06-29 | Launch security | Payment/webhook/2-user isolation/dep-audit | Not verified yet | Payment not implemented; account-isolation 2-user test and dependency/secret scan still pending |
 
 ## Rules
 - Never store secrets, credentials, payment data, customer data, raw PII, private keys, live API keys, DB URLs, Redis tokens, or webhook secrets in this file.
