@@ -249,30 +249,83 @@ def run_monthly_update():
     return total_rows, errors
 
 
-def maybe_auto_update():
+def _persist_db_to_storage() -> str | None:
     """
-    Açılışta eksik günleri otomatik tamamlar (catch-up). En fazla 30 dakikada bir
-    çalışır; böylece (özellikle bulutta) kullanıcı linke her girdiğinde beklemez.
-    Önbellek boşsa hiçbir şey yapmaz (kullanıcı 'İlk veri indirme'ye basar).
+    Calisma DB'sini VACUUM+gzip ile Supabase Storage'a yukler (giris yapan kullanicinin
+    JWT'siyle; kovada maintainer-only yazma politikasi uygulanir). Boylece guncellenen veri
+    container restart'larinda korunur. Basari None, aksi halde kisa hata metni doner.
     """
-    newest = cache.connect().execute("SELECT MAX(date) FROM prices").fetchone()[0]
-    if not (newest and cache.symbols_in_cache()):
-        return
-    if newest >= date.today().isoformat():
-        return  # zaten güncel
-    last = cache.get_setting("last_auto_update")
-    if last:
-        try:
-            if (datetime.now() - datetime.fromisoformat(last)).total_seconds() < 1800:
-                return  # son 30 dk içinde güncellendi
-        except ValueError:
-            pass
-    st.info("Kaçırılan günler güncelleniyor (internet gerekir)...")
+    user = st.session_state.get("user")
+    at = st.session_state.get("access_token", "")
+    if not (supabase_store.is_configured() and user and at):
+        return "giris yok"
+    import gzip as _gz
+    import os as _os
+    import shutil as _sh
+    import sqlite3 as _sq
+    import tempfile as _tf
+    src = cache._work_path()
+    if not _os.path.exists(src):
+        return "calisma DB yok"
+    tmp = _os.path.join(_tf.gettempdir(), "_persist_upload.sqlite")
     try:
-        run_price_update(full=False)
-        cache.set_setting("last_auto_update", datetime.now().isoformat())
+        _sh.copy2(src, tmp)
+        c = _sq.connect(tmp)
+        c.execute("VACUUM")
+        c.close()
+        with open(tmp, "rb") as f:
+            gz = _gz.compress(f.read(), 6)
+        # Boot-indirmeyi yavaslatacak asiri buyuk DB'yi yukleme ( or. yerel tam backfill).
+        if len(gz) > 15_000_000:
+            return f"DB cok buyuk ({len(gz)//1_000_000}MB), persist atlandi"
+        return supabase_store.storage_upload(gz, at)
     except Exception as e:
-        st.warning(f"Geçmiş veri güncellenemedi (eski veriyle devam): {e}")
+        return str(e)
+    finally:
+        try:
+            _os.remove(tmp)
+        except Exception:
+            pass
+
+
+def _auto_catchup():
+    """
+    Giris yapmis maintainer'in gunun ilk ziyaretinde, veri bayatsa gunluk fiyatlari ceker
+    ve Storage'a kalici yazar. Her rerun'da cagrilabilir; kendi kosullariyla en fazla gunde
+    bir kez fetch eder. (Boot blogunda DEGIL; login cozuldukten sonra calismali.)
+    """
+    if cache.provisional_date() is not None:
+        return  # seans kapanmadan (18:30 TRT oncesi) yeni KESIN veri yok; deneme/isaretleme yapma
+    if st.session_state.get("_autoupd_tried"):
+        return
+    if not (supabase_store.is_configured() and st.session_state.get("user")):
+        return
+    if not cache.symbols_in_cache():
+        return  # hic veri yoksa (ilk kurulum) elle 'Verileri Guncelle' beklenir
+    newest = cache.connect().execute("SELECT MAX(date) FROM prices").fetchone()[0]
+    behind = base.business_days_behind(newest) if newest else None
+    if not behind or behind < 1:
+        return
+    st.session_state["_autoupd_tried"] = True
+    today = date.today().isoformat()
+    if cache.get_setting("last_auto_update") == today:
+        return  # bugun zaten denendi (hafta sonu/tatilde bosa fetch etme)
+    with st.spinner("Güncel veriler indiriliyor (günün ilk açılışı, ~1 dk)..."):
+        try:
+            total, errs = run_price_update(full=False)
+        except Exception as e:
+            st.warning(f"Otomatik güncelleme başarısız (eski veriyle devam): {e}")
+            return
+        cache.set_setting("last_auto_update", today)  # yeni satir bulunmasa da: bugun denendi
+        nsym = len(cache.symbols_in_cache())
+        bad = nsym < 100 or (errs and len(errs) > 0.2 * max(nsym, 1))
+        bump_version()
+        if bad:
+            st.warning("Veri kalitesi düşük göründü; kalıcı kayıt atlandı (mevcut veri korunuyor).")
+            return
+        err = _persist_db_to_storage()
+        if err and err != "giris yok":
+            st.caption(f"Not: kalıcı kayıt yapılamadı ({err}). Veri bu oturumda güncel.")
 
 
 # İlk açılışta: mynet snapshot'ı çek + geçmiş veride eksik günleri otomatik tamamla.
@@ -296,6 +349,11 @@ if "boot" not in st.session_state:
             pass  # liste alınamazsa önbellekteki sembollerle devam
     st.session_state["boot"] = True
     bump_version()
+
+
+# Giris yapilmis maintainer'in gunun ilk ziyaretinde otomatik catch-up + Storage persist.
+# (close_df/gmax'tan ONCE; boylece guncelleme ayni render'da taze gorunur.)
+_auto_catchup()
 
 
 close_df, son_map, fark_map = load_closing(_data_version())
@@ -448,6 +506,7 @@ with st.sidebar:
                 st.warning(f"Anlık veri alınamadı: {e}")
             tr, errs = run_price_update(full=False)
             bump_version()
+            _persist_db_to_storage()  # giris yapilmissa Storage'a kalici yaz (yoksa no-op)
             st.success(f"Güncellendi (+{tr} satır).")
             st.rerun()
         with st.expander("🧠 ML veri bakımı", expanded=False):

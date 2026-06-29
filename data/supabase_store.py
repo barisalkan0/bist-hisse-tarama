@@ -73,6 +73,53 @@ def _rest_url(path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Storage (kalici veri dosyasi) — gunluk DB gzip'i burada tutulur
+# ---------------------------------------------------------------------------
+
+def storage_public_url():
+    """Kalici DB dosyasinin public (auth'suz okunur) URL'i. Yapilandirilmamissa None."""
+    url, _ = _creds()
+    if not url:
+        return None
+    try:
+        import settings as _cfg
+        bucket, obj = _cfg.STORAGE_BUCKET, _cfg.STORAGE_OBJECT
+    except Exception:
+        bucket, obj = "market-data", "cache.sqlite.gz"
+    return f"{url}/storage/v1/object/public/{bucket}/{obj}"
+
+
+def storage_upload(gz_bytes: bytes, access_token: str) -> str | None:
+    """
+    Gzip'li DB'yi Storage'a yukler (giris yapan kullanicinin JWT'siyle; maintainer-only
+    yazma politikasi kovada uygulanir). Basari None, hata metni doner.
+    """
+    url, anon = _creds()
+    if not (url and access_token):
+        return "Yapilandirma/oturum eksik."
+    try:
+        import settings as _cfg
+        bucket, obj = _cfg.STORAGE_BUCKET, _cfg.STORAGE_OBJECT
+    except Exception:
+        bucket, obj = "market-data", "cache.sqlite.gz"
+    try:
+        r = requests.post(
+            f"{url}/storage/v1/object/{bucket}/{obj}",
+            headers={
+                "apikey": anon,
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/gzip",
+                "x-upsert": "true",
+            },
+            data=gz_bytes,
+            timeout=60,
+        )
+        return None if r.ok else f"HTTP {r.status_code}: {r.text}"
+    except Exception as e:
+        return str(e)
+
+
+# ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
 

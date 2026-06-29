@@ -58,8 +58,45 @@ def _work_path():
     return os.path.join(repo, cfg.DB_PATH)
 
 
+def _try_storage_download(work):
+    """
+    Kalici DB'yi Supabase Storage'dan (gzip) indirir; gecerliyse work'e yazip True doner.
+    Boylece Streamlit Cloud'un gecici /tmp'sine ragmen veri restart'larda korunur.
+    Herhangi bir hata/timeout'ta False -> cagiran seed'e duser.
+    """
+    tmp = work + ".dl"
+    try:
+        from data import supabase_store
+        url = supabase_store.storage_public_url()
+        if not url:
+            return False
+        import gzip
+        import requests
+        r = requests.get(url, timeout=8)
+        if not r.ok:
+            return False
+        raw = gzip.decompress(r.content)
+        os.makedirs(os.path.dirname(work), exist_ok=True)
+        with open(tmp, "wb") as f:
+            f.write(raw)
+        c = sqlite3.connect(tmp)
+        ok = c.execute("PRAGMA integrity_check").fetchone()[0]
+        c.close()
+        if ok != "ok":
+            raise ValueError("integrity")
+        os.replace(tmp, work)
+        return True
+    except Exception:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        return False
+
+
 def _ensure_seeded(work):
-    """Calisma DB'si yoksa veya bozuksa, commit'lenen seed'den kopyalar."""
+    """Calisma DB'si yoksa/bozuksa: once Storage'dan indir, olmazsa commit'lenen seed'den kopyala."""
     need = not os.path.exists(work)
     if not need:
         try:
@@ -70,6 +107,8 @@ def _ensure_seeded(work):
         except Exception:
             need = True
     if need:
+        if _try_storage_download(work):
+            return
         seed = _seed_path()
         if os.path.exists(seed):
             try:

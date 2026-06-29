@@ -6,6 +6,11 @@ DB_PATH = "data/cache.sqlite"
 # Uygulama bu dosyaya ASLA yazmaz (bulutta git pull ile cakisip bozulmasin diye).
 SEED_PATH = "data/seed.sqlite"
 
+# Kalici veri: gunluk guncellenen DB, Supabase Storage'a (gzip) yazilir; boot'ta indirilir.
+# Boylece Streamlit Cloud'un gecici /tmp dosya sistemine ragmen veri restart'larda korunur.
+STORAGE_BUCKET = "market-data"
+STORAGE_OBJECT = "cache.sqlite.gz"
+
 # mynet canli borsa sayfasi (sembol listesi + isimler kaynagi)
 MYNET_URL = "https://finans.mynet.com/borsa/canliborsa/"
 
