@@ -127,7 +127,7 @@ def signup(email: str, password: str) -> str | None:
 # Abonelik kontrolü — REST API ile
 # ---------------------------------------------------------------------------
 
-def is_pro(user_id: str, access_token: str, **_) -> bool:
+def is_pro(user_id: str, access_token: str, *_) -> bool:
     """Kullanıcının aktif pro aboneliği var mı? REST API ile doğrular."""
     if not is_configured() or not access_token:
         return False
@@ -164,7 +164,7 @@ def is_pro(user_id: str, access_token: str, **_) -> bool:
 # Per-user Favoriler — REST API
 # ---------------------------------------------------------------------------
 
-def fav_list(user_id: str, access_token: str, **_) -> list:
+def fav_list(user_id: str, access_token: str, *_) -> list:
     try:
         r = requests.get(
             _rest_url("favorites"),
@@ -178,7 +178,7 @@ def fav_list(user_id: str, access_token: str, **_) -> list:
         return []
 
 
-def fav_add(user_id: str, symbol: str, access_token: str, **_) -> str | None:
+def fav_add(user_id: str, symbol: str, access_token: str, *_) -> str | None:
     try:
         r = requests.post(
             _rest_url("favorites"),
@@ -191,7 +191,7 @@ def fav_add(user_id: str, symbol: str, access_token: str, **_) -> str | None:
         return str(e)
 
 
-def fav_remove(user_id: str, symbol: str, access_token: str, **_) -> str | None:
+def fav_remove(user_id: str, symbol: str, access_token: str, *_) -> str | None:
     try:
         r = requests.delete(
             _rest_url("favorites"),
@@ -208,7 +208,7 @@ def fav_remove(user_id: str, symbol: str, access_token: str, **_) -> str | None:
 # Per-user Notlar — REST API
 # ---------------------------------------------------------------------------
 
-def note_all(user_id: str, access_token: str, **_) -> dict:
+def note_all(user_id: str, access_token: str, *_) -> dict:
     try:
         r = requests.get(
             _rest_url("notes"),
@@ -225,7 +225,7 @@ def note_all(user_id: str, access_token: str, **_) -> dict:
         return {}
 
 
-def note_set(user_id: str, symbol: str, text: str, access_token: str, **_) -> str | None:
+def note_set(user_id: str, symbol: str, text: str, access_token: str, *_) -> str | None:
     try:
         r = requests.post(
             _rest_url("notes"),
@@ -243,7 +243,7 @@ def note_set(user_id: str, symbol: str, text: str, access_token: str, **_) -> st
         return str(e)
 
 
-def note_delete(user_id: str, symbol: str, access_token: str, **_) -> str | None:
+def note_delete(user_id: str, symbol: str, access_token: str, *_) -> str | None:
     try:
         r = requests.delete(
             _rest_url("notes"),
@@ -260,7 +260,7 @@ def note_delete(user_id: str, symbol: str, access_token: str, **_) -> str | None
 # Per-user Blacklist — REST API
 # ---------------------------------------------------------------------------
 
-def blacklist_list(user_id: str, access_token: str, **_) -> list:
+def blacklist_list(user_id: str, access_token: str, *_) -> list:
     try:
         r = requests.get(
             _rest_url("blacklist"),
@@ -274,7 +274,7 @@ def blacklist_list(user_id: str, access_token: str, **_) -> list:
         return []
 
 
-def blacklist_add(user_id: str, symbol: str, access_token: str, **_) -> str | None:
+def blacklist_add(user_id: str, symbol: str, access_token: str, *_) -> str | None:
     try:
         r = requests.post(
             _rest_url("blacklist"),
@@ -287,7 +287,7 @@ def blacklist_add(user_id: str, symbol: str, access_token: str, **_) -> str | No
         return str(e)
 
 
-def blacklist_remove(user_id: str, symbol: str, access_token: str, **_) -> str | None:
+def blacklist_remove(user_id: str, symbol: str, access_token: str, *_) -> str | None:
     try:
         r = requests.delete(
             _rest_url("blacklist"),
