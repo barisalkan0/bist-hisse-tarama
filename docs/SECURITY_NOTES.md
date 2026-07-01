@@ -3,6 +3,12 @@
 Security risk level: high-risk
 Last reviewed: 2026-07-01
 
+## 2026-07-01 (later still) — Radar architecture fix + variant IDs wired + push
+- **Not a security-sensitive change in itself** (no auth/payment/data-handling logic touched), but two items worth recording:
+  - Removed `app.py::_auto_catchup` — a legacy synchronous per-user price-fetch path. It had NO real maintainer check despite its comment claiming one (any logged-in user, Pro or free, could trigger it), and its Supabase Storage upload had already become a silent no-op due to the 2026-06-29 RLS tightening (regular user JWTs aren't the maintainer uuid). Net effect of removal: eliminates a dead/wasteful code path, not a new attack surface reduction, but worth noting since it touched the same file as auth/session logic — reviewed, no auth-adjacent code was affected.
+  - Wired the 6 real Lemon Squeezy variant IDs (not secret — plain product identifiers) into Supabase Edge Function secrets and Vercel env vars (`NEXT_PUBLIC_LEMONSQUEEZY_VARIANT_ID_*`, intentionally public since they're just URL path segments in hosted checkout links). `LEMONSQUEEZY_WEBHOOK_SECRET` is still unset — the fail-closed behavior documented below still holds.
+  - Both `hisse-takip` (commits `8e52235`, `9d25f0e`) and `valysera-web` (commit `835ee6c`) were pushed to their `main`/`master` branches at the user's explicit request ("tamam pushla bakalım").
+
 ## 2026-07-01 (later) — 3-tier pricing expansion + Edge Function DEPLOYED
 - Expanded from a single "Pro" plan to 3 paid tiers (Basic/Premium/Studio) per user request. `webhook_events` table was created on the LIVE Supabase project by Barış (SQL from `supabase/schema.sql` run in SQL Editor) — the "not yet created" caveat below is now resolved for that table.
 - `lemonsqueezy-webhook` Edge Function **deployed and confirmed ACTIVE** (`supabase functions deploy --no-verify-jwt`, function id `0b4e2e2b-1a76-4caf-b45d-1d2893b9fe6c`, `verify_jwt: false` confirmed via `supabase functions list`). It is reachable but **fails closed**: `LEMONSQUEEZY_WEBHOOK_SECRET` is unset ⇒ any request gets HTTP 500 "webhook not configured" (checked in source: `if (!WEBHOOK_SECRET) return 500` before any signature check runs) — no unsigned/unverified request can reach the `subscriptions` write path. Variant→tier mapping (`LEMONSQUEEZY_VARIANT_ID_*`) is also unset ⇒ even once the secret is set, unmapped variants log a warning and skip the DB write rather than guessing a tier.

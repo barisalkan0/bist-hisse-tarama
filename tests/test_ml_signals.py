@@ -1,9 +1,11 @@
 import unittest
 import sqlite3
+from unittest import mock
 
 import numpy as np
 import pandas as pd
 
+from data import cache
 from ml_signals import daily, radar
 from ml_signals.features import build_feature_frame
 from ml_signals.labels import build_label_frame, build_training_frame
@@ -119,10 +121,10 @@ class MlSignalsTest(unittest.TestCase):
         idx = pd.bdate_range("2026-06-25", periods=12)
         prices = pd.DataFrame({"adj_close": np.linspace(10.0, 11.0, len(idx))}, index=idx)
         shown = daily._with_result_dates(daily.load_snapshot("2026-06-25", db=db), {"TEST": prices})
-        self.assertIn("5G Sonuç Günü", shown.columns)
-        self.assertIn("10G Sonuç Günü", shown.columns)
-        self.assertEqual(shown.iloc[0]["5G Sonuç Günü"], "02.07.2026")
-        self.assertEqual(shown.iloc[0]["10G Sonuç Günü"], "09.07.2026")
+        self.assertIn("5G Hedef Tarih", shown.columns)
+        self.assertIn("10G Hedef Tarih", shown.columns)
+        self.assertEqual(shown.iloc[0]["5G Hedef Tarih"], "02.07.2026")
+        self.assertEqual(shown.iloc[0]["10G Hedef Tarih"], "09.07.2026")
 
     def test_daily_outcomes_are_recorded_after_horizon(self):
         db = sqlite3.connect(":memory:")
@@ -175,6 +177,94 @@ class MlSignalsTest(unittest.TestCase):
         self.assertNotIn("vol_ratio", text)
         self.assertNotIn("sma", text.lower())
         self.assertIn("para girişi", text)
+
+    def test_target_date_is_independent_of_wall_clock(self):
+        """Regresyon: hedef tarih SADECE data_date'e göre hesaplanmalı, gerçek
+        sistem saatine (datetime.now()) hiç bakmamalı. Kullanıcı "bugün 1 Temmuz
+        ama hedef tarih 8 Temmuz görünüyor, saçma" diye şikayet etmişti; araştırma
+        bunun bug olmadığını, data_date baz alındığında matematiksel olarak doğru
+        olduğunu kanıtladı (bkz. test_daily_snapshot_includes_result_dates). Bu
+        test, gerçek "bugün" ne olursa olsun (uzak/keyfi bir data_date ile) aynı
+        garantiyi doğrulayarak kanıtı kalıcı hale getirir."""
+        idx = pd.bdate_range("2020-01-06", periods=15)  # kasıtlı olarak uzak bir tarih
+        prices = pd.DataFrame({"adj_close": np.linspace(5.0, 6.0, len(idx))}, index=idx)
+        self.assertEqual(daily._target_result_date(prices, "2020-01-06", 5), "13.01.2020")
+        self.assertEqual(daily._target_result_date(prices, "2020-01-06", 10), "20.01.2020")
+
+    def test_append_watch_symbols_only_scores_missing_subset(self):
+        """Regresyon: kişisel favori ekleme, TÜM evreni değil sadece eksik
+        sembol(ler)i skorlamalı (performans düzeltmesi — önceden `score_latest`
+        tüm evren için tekrar çağrılıyordu)."""
+        db = sqlite3.connect(":memory:")
+        data = _sample_data(symbols=30, days=150)
+        existing_symbols = list(data.keys())[:5]
+        rows = pd.DataFrame([{
+            "Hisse": s, "Radar Durumu": "Takip Edilecek", "Yükseliş Puanı": 55.0,
+            "Göreli Güç": 50.0, "5G Yükseliş": 54.0, "10G Yükseliş": 56.0,
+            "Güven": "Orta", "Vade": "5-10 iş günü", "Basit Neden": "-", "Ana Risk": "-",
+            "Son": 10.0, "Fark %": 0.0,
+        } for s in existing_symbols])
+        daily.save_snapshot_once(rows, "2026-06-25", db=db)
+
+        watch_symbol = list(data.keys())[10]
+        self.assertNotIn(watch_symbol, existing_symbols)
+
+        seen_inputs = []
+        real_score_latest = daily.score_latest
+
+        def _spy(data_arg, **kwargs):
+            seen_inputs.append(set(data_arg.keys()))
+            return real_score_latest(data_arg, **kwargs)
+
+        with mock.patch.object(daily, "score_latest", side_effect=_spy):
+            added = daily._append_watch_symbols(data, "2026-06-25", [watch_symbol], db=db)
+
+        self.assertEqual(added, 1)
+        self.assertEqual(len(seen_inputs), 1)
+        self.assertEqual(seen_inputs[0], {watch_symbol})  # 30 sembolün TAMAMI DEĞİL, sadece 1
+
+
+class RadarPipelineIntegrationTest(unittest.TestCase):
+    """VPS cron -> Streamlit ardışığının uçtan uca doğrulaması.
+
+    Gerçek ml_signals modülleriyle (gerçek eğitilmiş model dahil), izole
+    bellek-içi bir DB'ye yönlendirilmiş `data.cache.connect()` üzerinden
+    `daily.today_radar()`'ı — production'da çağrıldığı BİREBİR aynı şekilde —
+    çalıştırır. Amaç: VPS'in günde 1 kez hesapladığı radar snapshot'ının,
+    sonraki bir Streamlit kullanıcı ziyaretinde YENİDEN hesaplanmadığını ve
+    kişisel favori eklemenin listeyi bozmadığını uçtan uca kanıtlamak.
+    """
+
+    def test_vps_precompute_then_user_visit_does_not_rescore(self):
+        test_db = sqlite3.connect(":memory:")
+        data = _sample_data(symbols=40, days=150)
+        data_date = max(df.index[-1].date().isoformat() for df in data.values())
+
+        with mock.patch.object(cache, "connect", return_value=test_db):
+            # 1) VPS cron adımı (scripts/refresh_data.py): günün radar'ı ilk kez hesaplanır.
+            first_df, first_err, first_info = daily.today_radar(data, data_date=data_date)
+            self.assertIsNone(first_err)
+            self.assertTrue(first_info["created"])
+            self.assertFalse(first_df.empty)
+            first_symbols = sorted(first_df["Hisse"].tolist())
+
+            # 2) "Kullanıcı ziyareti" simülasyonu: aynı gün tekrar çağrılır — YENİDEN
+            # SKORLAMA YAPILMAMALI (created=False), aynı semboller dönmeli.
+            second_df, second_err, second_info = daily.today_radar(data, data_date=data_date)
+            self.assertIsNone(second_err)
+            self.assertFalse(second_info["created"])
+            self.assertEqual(sorted(second_df["Hisse"].tolist()), first_symbols)
+
+            # 3) Başka bir kullanıcı kişisel bir favori ekler — sadece o sembol
+            # eklenir, ana liste yeniden hesaplanmaz/bozulmaz.
+            watch_symbol = next(s for s in data if s not in first_symbols)
+            third_df, third_err, third_info = daily.today_radar(
+                data, data_date=data_date, watch_symbols=[watch_symbol]
+            )
+        self.assertIsNone(third_err)
+        self.assertFalse(third_info["created"])
+        self.assertIn(watch_symbol, third_df["Hisse"].tolist())
+        self.assertEqual(len(third_df), len(first_df) + 1)
 
 
 if __name__ == "__main__":

@@ -113,7 +113,7 @@ def _display(rows) -> pd.DataFrame:
             "Veri Tarihi", "Hisse", "Radar Durumu", "Yükseliş Puanı", "Göreli Güç",
             "ML Puanı", "5G Yükseliş", "10G Yükseliş", "5G Skor", "10G Skor",
             "Güven", "Veri Güveni", "Likidite", "Trend", "Hacim",
-            "Vade", "5G Sonuç Günü", "10G Sonuç Günü", "Takip Planı",
+            "Vade", "5G Hedef Tarih", "10G Hedef Tarih", "Takip Planı",
             "Basit Neden", "Ana Risk", "Son", "Fark %",
             "created_at", "data_date",
         ])
@@ -139,8 +139,8 @@ def _display(rows) -> pd.DataFrame:
         "Trend": df["trend_label"],
         "Hacim": df["volume_label"],
         "Vade": df["horizon"],
-        "5G Sonuç Günü": "—",
-        "10G Sonuç Günü": "—",
+        "5G Hedef Tarih": "—",
+        "10G Hedef Tarih": "—",
         "Takip Planı": follow,
         "Basit Neden": df["simple_reason"],
         "Ana Risk": df["main_risk"],
@@ -492,7 +492,13 @@ def _append_watch_symbols(data, data_date: str, watch_symbols, snapshot=None, fa
     if not missing:
         return 0
 
-    scores, err = score_latest(data, snapshot=snapshot, fark=fark)
+    # Sadece eksik sembolleri skorla — her sembolün özellikleri kendi geçmişinden
+    # bağımsız hesaplandığı için (çapraz-sembol bağımlılık yok), tüm evreni
+    # (~600 hisse) yeniden skorlamaya gerek yoktur, sadece eklenen 1-2 sembol yeter.
+    missing_data = {sym: df for sym, df in data.items() if sym in missing}
+    if not missing_data:
+        return 0
+    scores, err = score_latest(missing_data, snapshot=snapshot, fark=fark)
     if err or scores.empty:
         return 0
     add = scores[scores["Hisse"].isin(missing)].copy()
@@ -505,18 +511,19 @@ def _append_watch_symbols(data, data_date: str, watch_symbols, snapshot=None, fa
 
 
 def _with_result_dates(display: pd.DataFrame, data) -> pd.DataFrame:
-    """Radar tablosuna 5G/10G sonucunun hangi gune denk geldigini ekler."""
+    """Radar tablosuna 5G/10G HENÜZ GERÇEKLEŞMEMİŞ hedef tarihini ekler (gerçekleşmiş
+    sonuçlar için bkz. load_outcomes/render_outcomes_panel — bu ayrı ve karıştırılmamalı)."""
     if display.empty:
         return display
     out = display.copy()
-    for col in ("5G Sonuç Günü", "10G Sonuç Günü"):
+    for col in ("5G Hedef Tarih", "10G Hedef Tarih"):
         if col not in out.columns:
             out[col] = "—"
     for idx, row in out.iterrows():
         symbol = str(row.get("Hisse", "")).strip().upper()
         signal_date = row.get("data_date") or row.get("Veri Tarihi")
-        out.at[idx, "5G Sonuç Günü"] = _target_result_date(data.get(symbol), signal_date, 5)
-        out.at[idx, "10G Sonuç Günü"] = _target_result_date(data.get(symbol), signal_date, 10)
+        out.at[idx, "5G Hedef Tarih"] = _target_result_date(data.get(symbol), signal_date, 5)
+        out.at[idx, "10G Hedef Tarih"] = _target_result_date(data.get(symbol), signal_date, 10)
     return out
 
 

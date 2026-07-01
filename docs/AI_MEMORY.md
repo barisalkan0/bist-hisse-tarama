@@ -93,8 +93,46 @@ MCP project id: `C-Users-asus-OneDrive-Masa-st-ahin-hisse-takip`
 - **ROADMAP — promised on the pricing page but not built yet:** Telegram notifications (Premium+, labeled "(yeni)") and team-shared favorite lists (Studio, labeled "(yakında)"). See `[[bist-hisse-tarama-projesi]]` project memory for details — these are real sales promises now, should be prioritized.
 - REMAINING: Barış creates Premium/Studio Lemon Squeezy products (+ yearly variant for all 3 tiers) once the store is activated → shares 6 variant IDs → Claude sets them as Supabase secrets + Vercel `NEXT_PUBLIC_LEMONSQUEEZY_*` env vars → Barış adds the webhook in Lemon Squeezy dashboard (URL from the deployed function, 8 events) → shares the signing secret → Claude sets `LEMONSQUEEZY_WEBHOOK_SECRET` → end-to-end test via Lemon Squeezy "Simulate event" → switch to Live mode before real launch.
 
+## Akıllı Radar — Bekletme + Tarih Etiketleme Düzeltmesi (2026-07-01)
+Kullanıcı iki şikayet bildirdi: (1) login'de 612 hissenin verisi çekilirken bekletiliyor, Radar'ın
+günde 1 kez merkezi hesaplanmasını istiyor; (2) Radar tablosunda "bugün 1 Temmuz ama 5 günlük
+sonuç 8 Temmuz görünüyor, saçma" dedi. 3 paralel Explore ajanıyla araştırıldı, sonra düzeltildi:
+
+- **Tarih hesaplaması BUG DEĞİLDİ** — matematiksel olarak doğrulandı (`data_date`=2026-07-01 baz
+  alınarak `pandas.bdate_range` ile 5/10 iş günü ileri gidiliyor, 08.07/15.07 tam olarak doğru).
+  Asıl sorun etiketlemeydi: "5G/10G Sonuç Günü" adı "sonuç zaten oldu" izlenimi veriyordu, oysa bu
+  henüz gerçekleşmemiş bir HEDEF tarihti. **Düzeltme:** sütun adları "5G/10G Hedef Tarih" oldu
+  (`ml_signals/radar.py` DISPLAY_COLUMNS, `ml_signals/daily.py::_with_result_dates`/`_display`),
+  `app.py::render_radar_table`'a `column_config` ile "henüz gerçekleşmedi" açıklaması eklendi.
+- **612 hisse bekletmesinin gerçek kaynağı Radar DEĞİLDİ** — `app.py::_auto_catchup` (günlük fiyat
+  senkronizasyonu, "maintainer" yorumuna rağmen gerçek bir yetki kontrolü yoktu, günün ilk giren
+  HERHANGİ bir kullanıcısını ~1 dk bekletebiliyordu). VPS cron zaten günlük veriyi Storage'a
+  yüklüyor; bu senkron/bekletici kod **tamamen kaldırıldı**. Manuel "🔄 Verileri Güncelle" butonu
+  (opt-in) ve bayatlık uyarısı (`business_days_behind`) korundu.
+- **Radar hesaplaması zaten büyük ölçüde paylaşımlıydı** (`ml_radar_snapshot` PK
+  `data_date+symbol+model_kind`, `INSERT OR IGNORE` dedup) ama VPS bunu hiç tetiklemiyordu — ilk
+  Streamlit kullanıcısı günün ilk `score_latest()` çağrısını (tüm evren, ~600 sembol) yapıyordu.
+  **Düzeltme:** `scripts/refresh_data.py`'ye Storage upload'dan ÖNCE `ml_daily.today_radar(...)`
+  precompute adımı eklendi (`ml_signals/` tamamen Streamlit-bağımsız olduğu için kod tekrarı
+  gerekmedi) — artık VPS günde 1 kez hesaplıyor, hiçbir Streamlit kullanıcısı ilk-hesaplama
+  tetiklemiyor (mevcut dedup sayesinde `app.py` tarafında kod değişikliği gerekmedi).
+- **Küçük ek optimizasyon:** `ml_signals/daily.py::_append_watch_symbols` (bir kullanıcının o
+  günün listesinde olmayan favorisini eklerken) artık TÜM evreni değil sadece eksik sembol(ler)i
+  skorluyor (`score_latest`'e daraltılmış `data` dict veriliyor) — her sembolün özellikleri kendi
+  geçmişinden bağımsız hesaplandığı için (çapraz-sembol bağımlılık yok) sonuç aynı, sadece hızlı.
+- **Testler (kullanıcı unit+integration açıkça istedi):** 3 yeni test eklendi, mevcutlarla birlikte
+  11/11 yeşil: `test_target_date_is_independent_of_wall_clock` (tarih hesabının `datetime.now()`'a
+  bağlı olmadığının regresyon kanıtı), `test_append_watch_symbols_only_scores_missing_subset`
+  (optimizasyonun `score_latest`'i sadece eksik sembolle çağırdığının spy testi),
+  `RadarPipelineIntegrationTest::test_vps_precompute_then_user_visit_does_not_rescore` (repoda
+  İLK integration test — gerçek model + `data.cache.connect()` bellek-içi DB'ye patch'lenerek VPS
+  precompute → kullanıcı ziyareti → favori ekleme akışının uçtan uca, gerçek yeniden hesaplama
+  yapmadan çalıştığını kanıtlıyor).
+
 ## Current Verification
 - `python -B -m unittest discover -v` passed on 2026-06-29: 8 tests OK.
+- `python -B -m unittest discover -v` passed on 2026-07-01 (after Radar fix): **11/11 tests OK**
+  (8 eski + 3 yeni, bkz. yukarıdaki "Akıllı Radar" bölümü).
 - `python -B -c "import ast; ast.parse(open('app.py').read())"` — syntax OK.
 - MCP index status is ready, file-tree level coverage.
 - Static review confirmed note-card HTML escapes user note text before `unsafe_allow_html=True` rendering.
@@ -102,16 +140,21 @@ MCP project id: `C-Users-asus-OneDrive-Masa-st-ahin-hisse-takip`
 ## Active Work / Next Steps
 1. ✅ Supabase auth + per-user favorites/notes/blacklist live; Pro-only gating for those features.
 2. ✅ Automatic daily data pipeline live (Turkish VPS cron → Supabase Storage → app downloads).
+   **2026-07-01'de genişletildi:** VPS artık Akıllı Radar'ı da günde 1 kez precompute ediyor
+   (bkz. "Akıllı Radar" bölümü) — hem fiyat hem radar verisi tek gzip'te, tek pipeline'da.
 3. ✅ Marka/landing sitesi CANLI: valysera.com (Next.js+Vercel, ayrı repo `valysera-web`), conversion
    yapısı + dark/elit hero + yasal sayfalar + /login /signup placeholder + /pricing. Uygulama Tier 0:
    hâlâ Streamlit'te, landing'den linklenir (`SITE.appUrl`, tek satırda değişir).
 4. Aşama 4 = ödeme entegrasyonu **İLERLEDİ (2026-07-01)**: sağlayıcı Lemon Squeezy, 3 katmanlı
-   fiyatlandırma (Basic $9 / Premium $19 / Studio $45 + yıllık %25 indirim). Checkout artık
-   valysera-web `/pricing`'te; webhook Edge Function **deploy edildi (ACTIVE)**. `webhook_events`
-   tablosu canlıda oluşturuldu (Barış tarafından). SIRADAKI: Barış Premium/Studio ürünlerini +
-   yıllık varyantları Lemon Squeezy'de oluşturur (mağaza aktive olunca) → 6 varyant ID paylaşır →
-   Claude Supabase + Vercel secrets'larını ayarlar → Barış webhook'u ekler + signing secret
-   paylaşır → uçtan uca test → Live mode. Detay: yukarıdaki "Payment — Lemon Squeezy" bölümü.
+   fiyatlandırma (Başlangıç $9 / Premium $19 / Profesyonel $45 + yıllık %25 indirim, tier isimleri
+   Türkçe — iç `plan` değerleri `basic/premium/studio` aynen kalıyor). Checkout valysera-web
+   `/pricing`'te; webhook Edge Function **deploy edildi (ACTIVE)**; `webhook_events` tablosu
+   canlıda; **6 gerçek Lemon Squeezy varyant ID'si Supabase secrets + Vercel env'e işlendi**
+   (Barış'tan geldi: Basic 1859221/1859852, Premium 1859858/1859863, Studio 1859864/1859867).
+   Her iki repo push edildi (hisse-takip `9d25f0e`, valysera-web `835ee6c`).
+   SIRADAKI: `LEMONSQUEEZY_WEBHOOK_SECRET` hâlâ eksik — Barış mağaza aktive olunca Lemon
+   Squeezy'de webhook'u ekleyip signing secret'ı paylaşacak → Claude Supabase'e set edecek →
+   Lemon Squeezy "Simulate event" ile uçtan uca test → Live mode.
 5. SIRADAKI (henüz YOK): (a) yasal placeholder'ları doldur + hukukçu + SPK/VERBİS kontrolü;
    (b) Telegram bildirimleri + takım paylaşımlı favoriler (pricing sayfasında vaat edildi, kodu
    henüz yok); (c) Aşama 5 = uygulamayı Streamlit'ten kendi domain'ine taşı (Barış bunu istiyor —
@@ -143,6 +186,16 @@ MCP project id: `C-Users-asus-OneDrive-Masa-st-ahin-hisse-takip`
 - Dependency audit, secret scan, payment/webhook verification, database RLS/access rules, backup/restore test, rate limiting, and legal disclaimer review remain pending.
 
 ## Recent Changes
+- 2026-07-01 (Akıllı Radar): Fixed user-perceived "date bug" (was actually just confusing column
+  labels — "5G/10G Sonuç Günü" → "5G/10G Hedef Tarih" + help tooltip). Removed `app.py::_auto_catchup`
+  entirely (legacy synchronous per-user price fetch that blocked whoever triggered it; VPS cron +
+  Storage already keeps data fresh). Added radar precompute step to `scripts/refresh_data.py`
+  (before Storage upload) so VPS computes the day's Akıllı Radar snapshot once, centrally — no
+  Streamlit user ever triggers the first `score_latest()` call anymore. Optimized
+  `ml_signals/daily.py::_append_watch_symbols` to score only missing personal-favorite symbols
+  instead of the whole ~600-symbol universe. Added 3 new tests (2 unit + repo's first integration
+  test), full suite 11/11 green. Renamed pricing tiers to Turkish (Basic→Başlangıç,
+  Studio→Profesyonel, Premium unchanged) and wired in the 6 real Lemon Squeezy variant IDs.
 - 2026-07-01 (later): Expanded Lemon Squeezy integration from a single "Pro" plan to **3 paid tiers** (Basic $9/Premium $19/Studio $45 + yearly 25% off) after user feedback. `data/supabase_store.py` gained `current_tier()`/`has_tier()` tier hierarchy. `data/lemonsqueezy_store.py` simplified to just link to valysera-web's `/pricing` page (checkout UI moved there — `PricingComparison.tsx` rewritten as 4 cards × 11 fixed-order feature rows + monthly/yearly toggle). Webhook Edge Function updated to map `variant_id` → tier via new `LEMONSQUEEZY_VARIANT_ID_*` secrets, then **deployed and verified ACTIVE** on the live Supabase project (via `supabase functions deploy --no-verify-jwt`, using a user-provided Personal Access Token passed through a local file, never typed into a command literal — Claude Code's auto-mode classifier blocks literal secrets in Bash commands). `webhook_events` table created live by Barış. Logged 2 new features (Telegram notifications, team-shared favorites) as roadmap items — promised on the pricing page, not built yet.
 - 2026-07-01: Started Lemon Squeezy payment integration (code only, not deployed yet). Added `data/lemonsqueezy_store.py` (checkout URL builder), sidebar "Pro'ya Geç" link in `app.py`, `.streamlit/secrets.toml` placeholder keys (`LEMONSQUEEZY_STORE_SLUG`/`LEMONSQUEEZY_VARIANT_ID`), `webhook_events` table in `supabase/schema.sql`, and `supabase/functions/lemonsqueezy-webhook/index.ts` (signature verification + idempotency + 8-event handling). valysera-web `/pricing` Pro CTA now redirects to the app instead of a dead `/signup` placeholder. See "Payment — Lemon Squeezy" section above for what's still pending (deploy, secrets, live webhook, testing).
 - 2026-06-28: Added Claude/Codex project memory workflow, security notes, and MCP project indexing.

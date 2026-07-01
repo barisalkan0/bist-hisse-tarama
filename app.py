@@ -308,46 +308,6 @@ def _persist_db_to_storage() -> str | None:
             pass
 
 
-def _auto_catchup():
-    """
-    Giris yapmis maintainer'in gunun ilk ziyaretinde, veri bayatsa gunluk fiyatlari ceker
-    ve Storage'a kalici yazar. Her rerun'da cagrilabilir; kendi kosullariyla en fazla gunde
-    bir kez fetch eder. (Boot blogunda DEGIL; login cozuldukten sonra calismali.)
-    """
-    if cache.provisional_date() is not None:
-        return  # seans kapanmadan (18:30 TRT oncesi) yeni KESIN veri yok; deneme/isaretleme yapma
-    if st.session_state.get("_autoupd_tried"):
-        return
-    if not (supabase_store.is_configured() and st.session_state.get("user")):
-        return
-    if not cache.symbols_in_cache():
-        return  # hic veri yoksa (ilk kurulum) elle 'Verileri Guncelle' beklenir
-    newest = cache.connect().execute("SELECT MAX(date) FROM prices").fetchone()[0]
-    behind = base.business_days_behind(newest) if newest else None
-    if not behind or behind < 1:
-        return
-    st.session_state["_autoupd_tried"] = True
-    today = date.today().isoformat()
-    if cache.get_setting("last_auto_update") == today:
-        return  # bugun zaten denendi (hafta sonu/tatilde bosa fetch etme)
-    with st.spinner("Güncel veriler indiriliyor (günün ilk açılışı, ~1 dk)..."):
-        try:
-            total, errs = run_price_update(full=False)
-        except Exception as e:
-            st.warning(f"Otomatik güncelleme başarısız (eski veriyle devam): {e}")
-            return
-        cache.set_setting("last_auto_update", today)  # yeni satir bulunmasa da: bugun denendi
-        nsym = len(cache.symbols_in_cache())
-        bad = nsym < 100 or (errs and len(errs) > 0.2 * max(nsym, 1))
-        bump_version()
-        if bad:
-            st.warning("Veri kalitesi düşük göründü; kalıcı kayıt atlandı (mevcut veri korunuyor).")
-            return
-        err = _persist_db_to_storage()
-        if err and err != "giris yok":
-            st.caption(f"Not: kalıcı kayıt yapılamadı ({err}). Veri bu oturumda güncel.")
-
-
 # İlk açılışta: mynet snapshot'ı çek + geçmiş veride eksik günleri otomatik tamamla.
 if "boot" not in st.session_state:
     # Kalici depo (Upstash) baglantisini bir kez teshis et ve gizleme listesini esitle
@@ -371,11 +331,12 @@ if "boot" not in st.session_state:
     bump_version()
 
 
-# Giris yapilmis maintainer'in gunun ilk ziyaretinde otomatik catch-up + Storage persist.
-# (close_df/gmax'tan ONCE; boylece guncelleme ayni render'da taze gorunur.)
-_auto_catchup()
-
-
+# NOT (2026-07-01): Eskiden burada _auto_catchup() vardı — giriş yapan İLK kullanıcıyı
+# günün ilk ziyaretinde senkron ~1 dk bekleten bir fiyat çekme adımıydı. VPS cron
+# (scripts/refresh_data.py, günde 1 kez) artık veriyi + Akıllı Radar snapshot'ını
+# Storage'a taze yazıyor; hiçbir kullanıcı bunu tetiklememeli. Kaldırıldı — veri
+# tazeliği için sidebar'daki manuel "🔄 Verileri Güncelle" butonu (opt-in) ve
+# üstteki bayatlık uyarısı (business_days_behind) yeterli.
 close_df, son_map, fark_map = load_closing(_data_version())
 cached_syms = cache.symbols_in_cache()
 
@@ -741,6 +702,7 @@ def render_radar_table(df, key):
         return
     df = df.reset_index(drop=True)
     cols = [c for c in ml_radar.DISPLAY_COLUMNS if c in df.columns]
+    _date_help = "Henüz gerçekleşmemiş, beklenen hedef tarih (gerçekleşmiş sonuçlar için 'Sonuçlar' sekmesine bakın)."
     event = st.dataframe(
         style_results(df[cols]),
         width="stretch",
@@ -749,6 +711,10 @@ def render_radar_table(df, key):
         selection_mode="single-row",
         key=f"radar_tbl_{key}",
         height=430,
+        column_config={
+            "5G Hedef Tarih": st.column_config.Column(help=_date_help),
+            "10G Hedef Tarih": st.column_config.Column(help=_date_help),
+        },
     )
     try:
         sel = list(event.selection.rows)

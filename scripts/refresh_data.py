@@ -93,7 +93,30 @@ def main():
         log(f"KALITE DUSUK (sym={nsym}, gunluk_err={len(errs)}); UPLOAD ATLANDI")
         sys.exit(2)
 
-    # 5) VACUUM + gzip + Storage upload (service_role)
+    # 5) Akilli Radar'i GUNDE 1 KEZ burada hesapla (upload'dan ONCE) — boylece
+    # gzip'e giren DB'de gunun radar snapshot'i zaten hazir olur ve hicbir
+    # Streamlit kullanicisi ilk-hesaplama icin beklemez (ml_radar_snapshot'taki
+    # data_date+symbol+model_kind PK dedup'i sayesinde Streamlit tarafi ayni
+    # gun icin tekrar skorlama yapmaz, sadece mevcut kaydi okur). Bu adim
+    # basarisiz olsa da fiyat verisinin upload'ini ENGELLEMEZ (radar ikincil).
+    try:
+        from screeners import base
+        from ml_signals import daily as ml_daily
+
+        radar_data = base.load_all(min_days=30, exclude_blacklist=True)
+        radar_date = cache.connect().execute("SELECT MAX(date) FROM prices").fetchone()[0]
+        if radar_data and radar_date:
+            _, radar_err, radar_info = ml_daily.today_radar(radar_data, data_date=radar_date)
+            if radar_err:
+                log("radar uyari:", radar_err)
+            else:
+                log(f"radar: data_date={radar_info.get('data_date')} created={radar_info.get('created')}")
+        else:
+            log("radar atlandi: veri veya tarih yok")
+    except Exception as e:
+        log("radar HATA (upload yine de devam ediyor):", e)
+
+    # 6) VACUUM + gzip + Storage upload (service_role)
     src = cache._work_path()
     tmp = os.path.join(tempfile.gettempdir(), "_refresh_upload.sqlite")
     try:
