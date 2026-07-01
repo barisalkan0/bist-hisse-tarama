@@ -144,6 +144,26 @@ def login(email: str, password: str):
         return None, None, f"Giriş başarısız: {msg}"
 
 
+def restore_session(refresh_token: str):
+    """
+    Kaydedilmiş refresh_token ile oturumu yeniler (F5/tarayıcı yenilemesi sonrası
+    cookie'den otomatik giriş için — Streamlit session_state tam sayfa
+    yenilemede sıfırlanır, bu fonksiyon o boşluğu kapatır).
+    Döndürür: (user_dict, session, None) — başarı | (None, None, hata_metni) — hata
+    """
+    client = get_client()
+    if client is None:
+        return None, None, "Supabase yapılandırılmamış."
+    try:
+        res = client.auth.refresh_session(refresh_token)
+        if not (res and res.user and res.session):
+            return None, None, "Oturum yenilenemedi."
+        user_dict = {"id": res.user.id, "email": res.user.email}
+        return user_dict, res.session, None
+    except Exception as e:
+        return None, None, str(e)
+
+
 def logout():
     """Mevcut oturumu Supabase'de sonlandırır."""
     client = get_client()

@@ -1,6 +1,6 @@
 # AI Memory
 
-Last updated: 2026-07-01
+Last updated: 2026-07-02
 Security risk level: high-risk
 MCP project id: `C-Users-asus-OneDrive-Masa-st-ahin-hisse-takip`
 
@@ -129,6 +129,31 @@ sonuç 8 Temmuz görünüyor, saçma" dedi. 3 paralel Explore ajanıyla araştı
   precompute → kullanıcı ziyareti → favori ekleme akışının uçtan uca, gerçek yeniden hesaplama
   yapmadan çalıştığını kanıtlıyor).
 
+## Login Duvarı + Oturum Kalıcılığı + Tier Metni (2026-07-02)
+Kullanıcı 3 şey daha istedi: (1) kayıt olmadan uygulamanın HİÇ kullanılamaması (önceden temel
+taramalar herkese açıktı), (2) F5'te oturumun düşmemesi, (3) manuel verilen üst-katman
+aboneliğin sabit "Pro" değil gerçek tier adıyla ("Profesyonel" vb.) görünmesi.
+
+- **Login duvarı:** `app.py`'de `st.tabs(...)`'dan hemen önce bir kapı — Supabase yapılandırılmışsa
+  ve kullanıcı giriş yapmamışsa hiçbir sekme render edilmiyor, sadece "kayıt ol/giriş yap" mesajı +
+  Bilgi & Yasal içeriği gösterilip `st.stop()` ile durduruluyor. Yerel geliştirmede (secrets yoksa)
+  davranış değişmedi.
+- **F5 oturum kalıcılığı — `extra-streamlit-components` yeni bağımlılık:** `CookieManager` ile
+  `refresh_token` bir tarayıcı cookie'sinde (`sb_refresh`, ~30 gün) tutuluyor, sayfa açılışında
+  `data/supabase_store.py::restore_session()` ile oturum yenileniyor. **Önemli tuzak (bulunup
+  düzeltildi):** `CookieManager` ilk denemede `st.cache_resource` ile önbelleklenmişti — bu YANLIŞ,
+  çünkü nesne çerezleri sadece `__init__`'te okuyor ve `st.cache_resource` TÜM kullanıcılar arasında
+  paylaşılıyor (nesne donup kalıyor + teorik kullanıcılar-arası veri karışması riski). Düzeltme:
+  önbellekleme kaldırıldı, her rerun'da taze nesne oluşturuluyor. Login sonrası `st.rerun()`'dan
+  önce `time.sleep(0.5)` eklendi (cookie yazma talimatının tarayıcıya ulaşması için — bu süre
+  olmadan bazı denemelerde cookie hiç yazılmamış gibi davranıyordu).
+- **Tier-duyarlı metin:** Sidebar artık `current_tier()`'ı çağırıp `st.session_state["_tier_now"]`'da
+  önbellekliyor; caption `TIER_DISPLAY_NAMES` eşlemesiyle ("basic"→"Başlangıç", "premium"→"Premium",
+  "studio"→"Profesyonel") gösteriliyor.
+- Kullanıcı tarafından yerelde (`streamlit run app.py`, localhost:8501) elle test edildi: giriş→F5→
+  oturum korunuyor, çıkış→F5→login formuna düşüyor, giriş yapmadan sekmeler görünmüyor, tier metni
+  doğru gösteriliyor. Detay: `docs/SECURITY_NOTES.md`.
+
 ## Current Verification
 - `python -B -m unittest discover -v` passed on 2026-06-29: 8 tests OK.
 - `python -B -m unittest discover -v` passed on 2026-07-01 (after Radar fix): **11/11 tests OK**
@@ -160,6 +185,17 @@ sonuç 8 Temmuz görünüyor, saçma" dedi. 3 paralel Explore ajanıyla araştı
    henüz yok); (c) Aşama 5 = uygulamayı Streamlit'ten kendi domain'ine taşı (Barış bunu istiyor —
    Tier 1 self-host önce).
 6. Future: Supabase e-posta şablonları (Türkçe kayıt onayı); 2 hesapla canlı izolasyon testi.
+7. ✅ **Login duvarı + F5 oturum kalıcılığı + tier-duyarlı metin (2026-07-02)** — bkz. yukarıdaki
+   ilgili bölüm. Yerelde test edildi, henüz push EDİLMEDİ (bir sonraki adım).
+8. **AÇIK KARAR — model eğitimi otomasyonu (henüz planlanmadı, sadece konuşuldu 2026-07-02):**
+   Barış "model her gün nasıl yeniden eğitilecek" diye sordu. VDS'in 2GB RAM'i eğitim için
+   (günlük veri çekmekten daha ağır) riskli/sınırda olabilir; Barış kendi bilgisayarından da
+   yapmak istemiyor. Claude'un önerisi: GitHub Actions (ücretsiz, ~7GB RAM'li runner) —
+   VDS'in zaten Storage'a yüklediği `cache.sqlite.gz`'yi indirip (Is Yatirim'a hiç gerek yok,
+   IP engeli bu adımı etkilemiyor) haftalık/2 haftada bir yeniden eğitip yeni `model.joblib`'i
+   yine Storage'a yükler; Streamlit açılışta onu da indirir (git push otomasyonuna gerek kalmaz).
+   Günlük eğitim ÖNERİLMEDİ (5/10 iş günü sonuç ufku nedeniyle günlük yeni etiketli veri
+   anlamlı miktarda birikmiyor). Karar bekleniyor — henüz kod yazılmadı.
 
 ## Günün Kapanışı (2026-06-30)
 - Bugün TAMAMEN frontend/marka işi (`valysera-web`): landing redesign + conversion overhaul. Python

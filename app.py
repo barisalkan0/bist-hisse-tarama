@@ -5,9 +5,11 @@ BİST Hisse Tarama — Streamlit arayüzü.
 """
 import html
 import json
+import time
 from datetime import datetime, date
 from pathlib import Path
 
+import extra_streamlit_components as stx
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -22,6 +24,45 @@ from screeners import base, dip_donus, hacim_fiyat, hafta52, mevsim, sessizlik
 st.set_page_config(page_title="BİST Hisse Tarama", page_icon="📈", layout="wide")
 
 cache.init_db()
+
+
+# ----------------------------------------------------------------------------
+# Oturum kalıcılığı (F5 fix) — tarayıcı cookie'si ile
+# ----------------------------------------------------------------------------
+# st.session_state tam sayfa yenilemesinde (F5) sıfırlanır; bu yüzden refresh_token
+# bir cookie'de de tutulur ve her script çalışmasında oradan oturum yenilenmeye
+# çalışılır. ÖNEMLİ: CookieManager st.cache_resource İLE ÖNBELLEKLENMEZ —
+# __init__ tarayıcı çerezlerini o an okuyup nesnenin içine gömüyor; cache_resource
+# TÜM kullanıcılar arasında paylaşılan global bir önbellek olduğu için, önbelleklenirse
+# nesne ilk oluşturulduğu andaki (o kullanıcının/o anki) çerez durumunda donar kalır
+# ve farklı oturumlar birbirinin çerez/oturum durumunu görebilir. Bunun yerine HER
+# script çalışmasında (rerun) taze bir örnek oluşturulur (ucuz bir işlem, bileşen
+# render maliyeti normal bir widget kadar).
+_cookie_mgr = stx.CookieManager(key="cookie_mgr")
+
+COOKIE_REFRESH_KEY = "sb_refresh"
+TIER_DISPLAY_NAMES = {"basic": "Başlangıç", "premium": "Premium", "studio": "Profesyonel"}
+
+
+def _restore_session_from_cookie():
+    """Cookie'de kayıtlı refresh_token varsa ve session_state boşsa oturumu geri yükler."""
+    if not supabase_store.is_configured() or st.session_state.get("user"):
+        return
+    if st.session_state.get("_restore_tried"):
+        return
+    saved_refresh = _cookie_mgr.get(COOKIE_REFRESH_KEY)
+    if not saved_refresh:
+        return
+    st.session_state["_restore_tried"] = True
+    _u, _sess, _err = supabase_store.restore_session(saved_refresh)
+    if _u and _sess:
+        st.session_state["user"] = _u
+        st.session_state["access_token"] = _sess.access_token
+        st.session_state["refresh_token"] = _sess.refresh_token
+        st.rerun()
+
+
+_restore_session_from_cookie()
 
 
 # ----------------------------------------------------------------------------
@@ -515,11 +556,13 @@ with st.sidebar:
         _sb_user = st.session_state.get("user")
         if _sb_user:
             st.caption(f"👤 **{_sb_user['email']}**")
-            if "_pro_now" not in st.session_state:
-                st.session_state["_pro_now"] = supabase_store.is_pro(
+            if "_tier_now" not in st.session_state:
+                st.session_state["_tier_now"] = supabase_store.current_tier(
                     _sb_user["id"], st.session_state.get("access_token", ""))
+                st.session_state["_pro_now"] = st.session_state["_tier_now"] != "free"
             if st.session_state["_pro_now"]:
-                st.caption("✅ Pro abonelik aktif")
+                _tier_label = TIER_DISPLAY_NAMES.get(st.session_state["_tier_now"], "Pro")
+                st.caption(f"✅ {_tier_label} abonelik aktif")
             else:
                 st.caption("🔓 Ücretsiz hesap — Favoriler, Notlar ve Akıllı Radar Pro gerektirir")
                 _ls_url = lemonsqueezy_store.pricing_url(
@@ -527,8 +570,9 @@ with st.sidebar:
                 st.link_button("💎 Planları Gör", _ls_url, width="stretch")
             if st.button("Çıkış yap", key="auth_logout", width="stretch"):
                 supabase_store.logout()
+                _cookie_mgr.delete(COOKIE_REFRESH_KEY, key="del_sb_refresh")
                 for _k in ("user", "access_token", "refresh_token", "_pro_now",
-                           "_favs_cache", "_notes_cache", "_blacklist_cache"):
+                           "_tier_now", "_favs_cache", "_notes_cache", "_blacklist_cache"):
                     st.session_state.pop(_k, None)
                 st.rerun()
         else:
@@ -544,8 +588,16 @@ with st.sidebar:
                             st.session_state["user"] = _u
                             st.session_state["access_token"] = _sess.access_token
                             st.session_state["refresh_token"] = _sess.refresh_token
-                            for _k in ("_pro_now", "_favs_cache", "_notes_cache",
-                                       "_blacklist_cache"):
+                            _cookie_mgr.set(
+                                COOKIE_REFRESH_KEY, _sess.refresh_token,
+                                key="set_sb_refresh", max_age=30 * 24 * 3600,
+                            )
+                            # Tarayıcının "set cookie" bileşen talimatını işlemesi için
+                            # kısa bir an tanınır — hemen ardından st.rerun() çağrılırsa
+                            # cookie yazımı tamamlanmadan sayfa yeniden başlayabiliyor.
+                            time.sleep(0.5)
+                            for _k in ("_pro_now", "_tier_now", "_favs_cache",
+                                       "_notes_cache", "_blacklist_cache"):
                                 st.session_state.pop(_k, None)
                             st.rerun()
                     else:
@@ -1243,6 +1295,34 @@ def _render_radar_tab():
 # Supabase yazma hatası varsa bir sonraki render'da göster
 if "_sb_err" in st.session_state:
     st.error(st.session_state.pop("_sb_err"))
+
+# ----------------------------------------------------------------------------
+# Giriş duvarı — kayıt olmadan/giriş yapmadan hiçbir sekme (Bilgi & Yasal hariç)
+# gösterilmez. Yerel geliştirmede Supabase yapılandırılmamışsa (secrets yok) bu
+# duvar devre dışıdır — eski anonim-mod geliştirme akışı bozulmasın diye.
+# ----------------------------------------------------------------------------
+if supabase_store.is_configured() and not st.session_state.get("user"):
+    st.info(
+        "🔒 Bu uygulamayı kullanmak için ücretsiz kayıt olman veya giriş yapman gerekiyor. "
+        "Soldaki kenar çubuğundan **'Kayıt ol'** veya **'Giriş yap'** bölümünü kullan."
+    )
+    st.subheader("📄 Bilgi & Yasal")
+    st.caption(
+        "Aşağıdaki metinler **taslaktır** ve yayın öncesi hukukçu onayından geçecektir. "
+        "Bilgilendirme amaçlıdır."
+    )
+    with st.expander("⚖️ Yasal Uyarı / Sorumluluk Reddi", expanded=True):
+        st.markdown(load_legal("disclaimer"))
+    with st.expander("📃 Kullanım Şartları"):
+        st.markdown(load_legal("terms"))
+    with st.expander("🔒 Gizlilik Politikası & KVKK"):
+        st.markdown(load_legal("privacy"))
+    with st.expander("💳 Fiyatlandırma"):
+        st.markdown(load_legal("pricing"))
+    with st.expander("↩️ İade ve İptal Politikası"):
+        st.markdown(load_legal("refunds"))
+    st.stop()
+
 
 # ----------------------------------------------------------------------------
 # Sekmeler

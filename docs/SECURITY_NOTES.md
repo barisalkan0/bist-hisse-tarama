@@ -1,7 +1,15 @@
 # Security Notes
 
 Security risk level: high-risk
-Last reviewed: 2026-07-01
+Last reviewed: 2026-07-02
+
+## 2026-07-02 — Login duvarı + cookie tabanlı oturum kalıcılığı (auth değişikliği)
+- **Yeni davranış:** Supabase yapılandırılmışsa artık HİÇBİR sekme (Bilgi & Yasal hariç) giriş yapmadan görünmüyor — `app.py`'de `st.tabs(...)`'dan hemen önce bir kapı (`if ... and not st.session_state.get("user"): ...; st.stop()`). Yerel geliştirmede Supabase yapılandırılmamışsa (secrets yok) davranış DEĞİŞMEDİ — eski anonim-mod fallback korunuyor.
+- **Yeni bağımlılık: `extra-streamlit-components`** (F5/sayfa yenilemesinde oturumun düşmemesi için). `CookieManager`, kullanıcının `refresh_token`'ını bir tarayıcı cookie'sinde (`sb_refresh`, ~30 gün, `SameSite=Strict`, sadece login/logout'ta yazılıp siliniyor) tutuyor; sayfa açılışında bu cookie'den `data/supabase_store.py::restore_session()` ile oturum yenileniyor.
+- **KRİTİK bulunan/düzeltilen tasarım hatası:** İlk implementasyon `CookieManager`'ı `st.cache_resource` ile önbelleklemişti — bu kütüphanenin `__init__`'i tarayıcı çerezlerini o an okuyup nesneye gömüyor, `st.cache_resource` ise TÜM kullanıcılar arasında paylaşılan global bir önbellek. Sonuç: nesne yalnızca İLK oluşturulduğu anda okunuyor ve o andaki (yanlış/bayat) çerez durumunda donup kalıyor — teorik olarak bir kullanıcının oturum durumunun başka bir kullanıcının script çalışmasına sızması riski de vardı. **Düzeltme:** `st.cache_resource` kaldırıldı, `CookieManager` her script çalışmasında (her rerun'da) taze oluşturuluyor — bu kütüphane için doğru/beklenen kullanım şekli.
+- **Refresh_token artık tarayıcı cookie'sinde de duruyor** — yeni bir hassas-veri saklama noktası (önceden sadece sunucu tarafı `st.session_state`'teydi). Bu, standart "oturumda kal" (remember me) deseni; token'ın kendisi şifre değil, sadece yeni bir access_token almak için kullanılabilir, ~30 gün ömürlü. `secure` bayrağı bilinçli olarak zorlanmadı (yerel `http://localhost` geliştirmesini bozmamak için) — production Streamlit Cloud zaten HTTPS servis ettiği için bu, tarayıcının cookie'yi yalnızca HTTPS üzerinden görmesini pratikte etkilemiyor, ama ileride `secure=True`'nun ortam bazlı zorlanması (gerçek "hardening" adımı) değerlendirilebilir.
+- Sidebar'daki abonelik metni artık tier-duyarlı (`current_tier()` ile "Başlangıç"/"Premium"/"Profesyonel" gösteriyor, sabit "Pro" değil) — güvenlik açısından nötr bir UX düzeltmesi, erişim kontrolü mantığı (`has_tier`/`is_pro`) değişmedi.
+- Yerel tarayıcı testiyle doğrulandı (kullanıcı elle test etti): giriş → F5 → oturum korunuyor; çıkış → F5 → login formuna düşüyor (cookie temizleniyor); giriş yapmadan hiçbir sekme görünmüyor.
 
 ## 2026-07-01 (later still) — Radar architecture fix + variant IDs wired + push
 - **Not a security-sensitive change in itself** (no auth/payment/data-handling logic touched), but two items worth recording:
