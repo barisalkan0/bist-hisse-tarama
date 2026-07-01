@@ -14,7 +14,7 @@ from plotly.subplots import make_subplots
 import streamlit as st
 
 import settings as cfg
-from data import cache, universe, fetch, store, supabase_store
+from data import cache, universe, fetch, store, supabase_store, lemonsqueezy_store
 from ml_signals import daily as ml_daily
 from ml_signals import radar as ml_radar
 from screeners import base, dip_donus, hacim_fiyat, hafta52, mevsim, sessizlik
@@ -89,6 +89,26 @@ st.markdown(
     '</div>',
     unsafe_allow_html=True,
 )
+
+# Her ekranda görünen kısa yasal uyarı (tam metin: Bilgi & Yasal sekmesi)
+st.caption(
+    "ℹ️ Bu uygulama **yatırım danışmanlığı / al-sat tavsiyesi değildir**; yalnızca "
+    "karar destek amaçlıdır. Ayrıntı için **Bilgi & Yasal** sekmesine bakın."
+)
+
+
+# ----------------------------------------------------------------------------
+# Yasal metin yükleyici (legal/*.md) — Next.js'e taşınabilir saf içerik
+# ----------------------------------------------------------------------------
+_LEGAL_DIR = Path(__file__).parent / "legal"
+
+
+def load_legal(name: str) -> str:
+    """legal/<name>.md içeriğini döndürür; yoksa kısa uyarı döndürür."""
+    try:
+        return (_LEGAL_DIR / f"{name}.md").read_text(encoding="utf-8")
+    except Exception:
+        return f"_'{name}' metni bulunamadı._"
 
 
 # ----------------------------------------------------------------------------
@@ -541,6 +561,9 @@ with st.sidebar:
                 st.caption("✅ Pro abonelik aktif")
             else:
                 st.caption("🔓 Ücretsiz hesap — Favoriler, Notlar ve Akıllı Radar Pro gerektirir")
+                _ls_url = lemonsqueezy_store.pricing_url(
+                    email=_sb_user.get("email"), user_id=_sb_user.get("id"))
+                st.link_button("💎 Planları Gör", _ls_url, width="stretch")
             if st.button("Çıkış yap", key="auth_logout", width="stretch"):
                 supabase_store.logout()
                 for _k in ("user", "access_token", "refresh_token", "_pro_now",
@@ -1259,10 +1282,10 @@ if "_sb_err" in st.session_state:
 # Sekmeler
 # ----------------------------------------------------------------------------
 (tab_summary, tab1, tab2, tab_52, tab_mevsim, tab_hareketlenme, tab_ml, tab3,
- tab_fav, tab_notes, tab4) = st.tabs(
+ tab_fav, tab_notes, tab4, tab_legal) = st.tabs(
     ["🏠 Özet", "🔻➡️🔺 Dipten Dönüş", "📊 Hacim / Fiyat", "📉 52 Hafta",
      "📅 Mevsimsellik", "⚡ Hareketlenme", "🧠 Akıllı Radar", "📋 Tüm Hisseler",
-     "⭐ Favoriler", "📝 Notlar", "🚫 Devre Dışı"]
+     "⭐ Favoriler", "📝 Notlar", "🚫 Devre Dışı", "📄 Bilgi & Yasal"]
 )
 
 
@@ -1698,3 +1721,22 @@ with tab4:
                     st.rerun()
         else:
             st.info("Gizlenen hisse yok.")
+
+
+# --- Bilgi & Yasal (herkese açık — giriş/Pro gerektirmez) ---
+with tab_legal:
+    st.subheader("📄 Bilgi & Yasal")
+    st.caption(
+        "Aşağıdaki metinler **taslaktır** ve yayın öncesi hukukçu onayından geçecektir. "
+        "Bilgilendirme amaçlıdır."
+    )
+    with st.expander("⚖️ Yasal Uyarı / Sorumluluk Reddi", expanded=True):
+        st.markdown(load_legal("disclaimer"))
+    with st.expander("📃 Kullanım Şartları"):
+        st.markdown(load_legal("terms"))
+    with st.expander("🔒 Gizlilik Politikası & KVKK"):
+        st.markdown(load_legal("privacy"))
+    with st.expander("💳 Fiyatlandırma"):
+        st.markdown(load_legal("pricing"))
+    with st.expander("↩️ İade ve İptal Politikası"):
+        st.markdown(load_legal("refunds"))

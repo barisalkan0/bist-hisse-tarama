@@ -13,3 +13,7 @@ data/cache.sqlite
 
 # Streamlit secrets - gizli anahtarlar, asla commit edilmez
 .streamlit/secrets.toml
+
+# Supabase CLI yerel önbelleği (link/deploy meta verisi, secret degil ama
+# makineye özel/gecici)
+supabase/.temp/

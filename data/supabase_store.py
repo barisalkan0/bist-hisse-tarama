@@ -174,10 +174,13 @@ def signup(email: str, password: str) -> str | None:
 # Abonelik kontrolü — REST API ile
 # ---------------------------------------------------------------------------
 
-def is_pro(user_id: str, access_token: str, *_) -> bool:
-    """Kullanıcının aktif pro aboneliği var mı? REST API ile doğrular."""
+_TIER_RANK = {"free": 0, "basic": 1, "premium": 2, "studio": 3}
+
+
+def current_tier(user_id: str, access_token: str, *_) -> str:
+    """Kullanıcının aktif en yüksek abonelik katmanı ('free' | 'basic' | 'premium' | 'studio')."""
     if not is_configured() or not access_token:
-        return False
+        return "free"
     try:
         r = requests.get(
             _rest_url("subscriptions"),
@@ -189,22 +192,35 @@ def is_pro(user_id: str, access_token: str, *_) -> bool:
             timeout=10,
         )
         if not r.ok:
-            return False
+            return "free"
+        best = "free"
         for row in r.json():
-            if row.get("plan") != "pro" or row.get("status") != "active":
+            plan = row.get("plan")
+            if plan not in _TIER_RANK or row.get("status") != "active":
                 continue
             period_end = row.get("current_period_end")
-            if period_end is None:
-                return True
-            try:
-                end_dt = datetime.fromisoformat(period_end.replace("Z", "+00:00"))
-                if end_dt > datetime.now(timezone.utc):
-                    return True
-            except Exception:
-                return True
-        return False
+            active = True
+            if period_end is not None:
+                try:
+                    end_dt = datetime.fromisoformat(period_end.replace("Z", "+00:00"))
+                    active = end_dt > datetime.now(timezone.utc)
+                except Exception:
+                    active = True
+            if active and _TIER_RANK[plan] > _TIER_RANK[best]:
+                best = plan
+        return best
     except Exception:
-        return False
+        return "free"
+
+
+def has_tier(user_id: str, access_token: str, min_tier: str, *_) -> bool:
+    """Kullanıcının katmanı en az `min_tier` mi ('basic'/'premium'/'studio')?"""
+    return _TIER_RANK.get(current_tier(user_id, access_token), 0) >= _TIER_RANK.get(min_tier, 0)
+
+
+def is_pro(user_id: str, access_token: str, *_) -> bool:
+    """Kullanıcının herhangi bir ücretli (en az Basic) aboneliği var mı?"""
+    return has_tier(user_id, access_token, "basic")
 
 
 # ---------------------------------------------------------------------------
