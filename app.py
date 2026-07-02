@@ -590,7 +590,7 @@ with st.sidebar:
                             st.session_state["refresh_token"] = _sess.refresh_token
                             _cookie_mgr.set(
                                 COOKIE_REFRESH_KEY, _sess.refresh_token,
-                                key="set_sb_refresh", max_age=30 * 24 * 3600,
+                                key="set_sb_refresh", max_age=7 * 24 * 3600,
                             )
                             # Tarayıcının "set cookie" bileşen talimatını işlemesi için
                             # kısa bir an tanınır — hemen ardından st.rerun() çağrılırsa
@@ -624,11 +624,6 @@ with st.sidebar:
                 st.code(_err or "bilinmiyor")
         else:
             st.caption("🟡 Kalıcı gizleme: anahtar **okunamadı** (Secrets adı/formatı?).")
-            with st.expander("Teşhis: uygulamanın gördüğü anahtar adları"):
-                st.write("Değerler değil, yalnızca **isimler** (gizli değil):")
-                st.code("\n".join(store.secret_keys()) or "(hiç anahtar yok)")
-                st.caption("Burada `UPSTASH_REDIS_REST_URL` ve `UPSTASH_REDIS_REST_TOKEN` "
-                           "isimlerini birebir görmüyorsan, Secrets'taki isim/format hatalıdır.")
     st.caption(
         "Gün sonu (EOD) veriye dayanır.\n\n"
         "**Kaynak:** mynet (hisse listesi + isimler), İş Yatırım (geçmiş kapanış + "
@@ -1176,120 +1171,80 @@ def _row_detail(sym, key, chart_days):
 # Radar sekmesi içeriği (abonelik kapısı arkasında çağrılır)
 # ----------------------------------------------------------------------------
 def _render_radar_tab():
-    """Akıllı Radar sekme içeriği — sadece pro kullanıcılar görür."""
-    with st.expander("Kendi takip listem", expanded=False):
-        favs_now = _get_favs()
-        syms_pool = set(cached_syms)
-        if not close_df.empty:
-            syms_pool |= set(close_df["symbol"])
-        addable = [s for s in sorted(syms_pool) if s not in favs_now]
-        add_watch = st.multiselect("Takibe eklenecek hisse", addable, key="radar_watch_add")
-        if st.button("Takibe ekle", key="radar_watch_add_btn") and add_watch:
-            for s in add_watch:
-                _add_fav(s)
-            st.rerun()
-        favs_now = _get_favs()
-        if favs_now:
-            st.caption("Takipteki hisseler:")
-            for s in favs_now:
-                c1, c2 = st.columns([4, 1])
-                c1.write(s)
-                if c2.button("Çıkar", key=f"radar_watch_remove_{s}"):
-                    _remove_fav(s)
-                    st.rerun()
-        else:
-            st.caption("Henüz takip listene eklenmiş hisse yok.")
+    """Akıllı Radar sekme içeriği — sadece pro kullanıcılar görür.
 
-    favs_now = _get_favs()
-    radar_df, radar_err, radar_info = ml_daily.today_radar(
-        data, snapshot=son_map, fark=fark_map, data_date=gmax, watch_symbols=favs_now
+    G1 güvenlik düzeltmesi (2026-07-02): radar/sonuç verisi artık VPS cron'unda
+    hesaplanıp Supabase Postgres'e (radar_snapshots/radar_outcomes) yazılıyor;
+    burada yalnızca kullanıcının KENDİ access_token'ıyla REST üzerinden okunuyor
+    (ücretli-tier RLS kontrolünü sunucuda zorlar; public gzip'te bu tablolar
+    artık yok). "Kendi Takibim" (anlık yerel skorlama) özelliği, Streamlit'in
+    kendisi artık radar hesaplamadığı için bu geçiş süresince kaldırıldı.
+    """
+    at, _ = _tokens()
+    rows, data_date = supabase_store.radar_snapshot(at)
+    if not data_date:
+        st.info("Bugün için radar verisi henüz hazır değil. Biraz sonra tekrar dene.")
+        return
+
+    radar_df = ml_daily._with_result_dates(ml_daily._display(rows), data)
+    st.caption(f"{tr_date(data_date)} kapanışı için radar listesi.")
+
+    counts = radar_df["Radar Durumu"].value_counts()
+    strong_count = int(counts.get("Güçlü Aday", 0))
+    watch_count = int(counts.get("Takip Edilecek", 0))
+    risky_count = int(counts.get("Riskli Ama Hareketli", 0))
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Bugün güçlü sinyal", strong_count)
+    m2.metric("Teyit bekleyen", watch_count)
+    m3.metric("Hareketli / riskli", risky_count)
+    st.caption(
+        "Yükseliş Puanı 0-100 arasıdır. 50 civarı zayıf, 60 üstü izlemeye değer, "
+        "70 üstü daha güçlü sinyal sayılır. Göreli Güç destekleyici filtredir."
     )
-    if radar_err:
-        st.info(radar_err)
-        st.code("python -m ml_signals.train")
-        st.caption(
-            "Model yoksa veya backtest geçmediyse radar canlı aday göstermez. "
-            "Bu bilinçli güvenlik kuralıdır."
+    if strong_count == 0:
+        st.info(
+            "Bugün güçlü sinyal yoksa bu normaldir. Sistem zayıf günü zorla aday üretmez; "
+            "yalnızca takip etmeye değer hisseleri ayrı gösterir."
         )
+    with st.expander("Liste anlamları", expanded=False):
+        st.markdown(
+            "- **Bugün Güçlü Sinyal:** Yükseliş puanı, göreli güç, veri geçmişi ve likidite birlikte olumlu; bugün detaylı incelenir.\n"
+            "- **Teyit Bekleyenler:** Yükseliş ihtimali var ama göreli güç, hacim veya trend tarafında teyit eksik; 3-5 iş günü puan/grafik izlenir.\n"
+            "- **Hareketli / Riskli:** Hissede hareket var ama oynaklık, zayıf teyit veya hızlı yükseliş riski yüksek; acele edilmez.\n"
+            "- **Sonuçlar:** Süresi dolan sinyallerin 5/10 iş günü sonra gerçekten tutup tutmadığını gösterir."
+        )
+
+    view_label_map = {
+        "Radar Listesi": "Tümü",
+        "Bugün Güçlü Sinyal": "Güçlü Aday",
+        "Teyit Bekleyenler": "Takip Edilecek",
+        "Hareketli / Riskli": "Riskli Ama Hareketli",
+        "Sonuçlar": "Sonuçlar",
+    }
+    selected_label = st.pills(
+        "Liste",
+        list(view_label_map.keys()),
+        default="Radar Listesi",
+        selection_mode="single",
+    ) or "Radar Listesi"
+    view = view_label_map[selected_label]
+    if view == "Sonuçlar":
+        outcomes = ml_daily._display_outcomes(supabase_store.radar_outcomes(at))
+        render_outcomes_panel(outcomes)
     else:
-        _eval_key = f"_eval_done_{gmax}"
-        if _eval_key not in st.session_state:
-            try:
-                ml_daily.evaluate_outcomes(data, as_of_date=gmax)
-            except Exception as e:
-                st.warning(f"Sonuç kayıtları güncellenemedi: {e}")
-            st.session_state[_eval_key] = True
-
-        data_date = radar_info.get("data_date") or (gmax or "—")
-        if radar_info.get("created"):
-            st.success(f"{tr_date(data_date)} kapanışı için bugünün radar listesi oluşturuldu.")
-        else:
-            st.caption(f"{tr_date(data_date)} kapanışı daha önce işlendi; aynı gün ikinci radar kaydı yazılmadı.")
-
-        counts = radar_df["Radar Durumu"].value_counts()
-        strong_count = int(counts.get("Güçlü Aday", 0))
-        watch_count = int(counts.get("Takip Edilecek", 0))
-        risky_count = int(counts.get("Riskli Ama Hareketli", 0))
-        own_count = int(len(set(favs_now) & set(radar_df["Hisse"])))
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Bugün güçlü sinyal", strong_count)
-        m2.metric("Teyit bekleyen", watch_count)
-        m3.metric("Hareketli / riskli", risky_count)
-        m4.metric("Kendi takibim", own_count)
-        st.caption(
-            "Yükseliş Puanı 0-100 arasıdır. 50 civarı zayıf, 60 üstü izlemeye değer, "
-            "70 üstü daha güçlü sinyal sayılır. Göreli Güç destekleyici filtredir."
-        )
-        if strong_count == 0:
-            st.info(
-                "Bugün güçlü sinyal yoksa bu normaldir. Sistem zayıf günü zorla aday üretmez; "
-                "yalnızca takip etmeye değer hisseleri ayrı gösterir."
-            )
-        with st.expander("Liste anlamları", expanded=False):
-            st.markdown(
-                "- **Bugün Güçlü Sinyal:** Yükseliş puanı, göreli güç, veri geçmişi ve likidite birlikte olumlu; bugün detaylı incelenir.\n"
-                "- **Teyit Bekleyenler:** Yükseliş ihtimali var ama göreli güç, hacim veya trend tarafında teyit eksik; 3-5 iş günü puan/grafik izlenir.\n"
-                "- **Hareketli / Riskli:** Hissede hareket var ama oynaklık, zayıf teyit veya hızlı yükseliş riski yüksek; acele edilmez.\n"
-                "- **Kendi Takibim:** Senin eklediğin hisseler; radara girmese bile sonucu kayda alınır.\n"
-                "- **Sonuçlar:** Süresi dolan sinyallerin 5/10 iş günü sonra gerçekten tutup tutmadığını gösterir."
-            )
-
-        view_label_map = {
-            "Radar Listesi": "Tümü",
-            "Bugün Güçlü Sinyal": "Güçlü Aday",
-            "Teyit Bekleyenler": "Takip Edilecek",
-            "Hareketli / Riskli": "Riskli Ama Hareketli",
-            "Kendi Takibim": "Kendi Takibim",
-            "Sonuçlar": "Sonuçlar",
-        }
-        selected_label = st.pills(
-            "Liste",
-            list(view_label_map.keys()),
-            default="Radar Listesi",
-            selection_mode="single",
-        ) or "Radar Listesi"
-        view = view_label_map[selected_label]
-        if view == "Sonuçlar":
-            outcomes = ml_daily.load_outcomes()
-            render_outcomes_panel(outcomes)
-        elif view == "Kendi Takibim":
-            favs = set(_get_favs())
-            show = radar_df[radar_df["Hisse"].isin(favs)].copy() if favs else radar_df.iloc[0:0]
-        else:
-            show = radar_df if view == "Tümü" else radar_df[radar_df["Radar Durumu"] == view]
-        if view != "Sonuçlar":
-            q_ml = st.text_input("Hisse ara", key="q_ml").strip().upper()
-            if q_ml:
-                show = show[show["Hisse"].str.contains(q_ml)]
-            display_show = show.copy()
-            if "Radar Durumu" in display_show.columns:
-                display_show["Radar Durumu"] = display_show["Radar Durumu"].replace({
-                    "Güçlü Aday": "Bugün Güçlü Sinyal",
-                    "Takip Edilecek": "Teyit Bekleyen",
-                    "Riskli Ama Hareketli": "Hareketli / Riskli",
-                })
-            st.markdown(f"**{len(display_show)} aday** gösteriliyor. Satıra tıkla → açıklama ve grafik.")
-            render_radar_table(display_show, "tml")
+        show = radar_df if view == "Tümü" else radar_df[radar_df["Radar Durumu"] == view]
+        q_ml = st.text_input("Hisse ara", key="q_ml").strip().upper()
+        if q_ml:
+            show = show[show["Hisse"].str.contains(q_ml)]
+        display_show = show.copy()
+        if "Radar Durumu" in display_show.columns:
+            display_show["Radar Durumu"] = display_show["Radar Durumu"].replace({
+                "Güçlü Aday": "Bugün Güçlü Sinyal",
+                "Takip Edilecek": "Teyit Bekleyen",
+                "Riskli Ama Hareketli": "Hareketli / Riskli",
+            })
+        st.markdown(f"**{len(display_show)} aday** gösteriliyor. Satıra tıkla → açıklama ve grafik.")
+        render_radar_table(display_show, "tml")
 
 
 # Supabase yazma hatası varsa bir sonraki render'da göster

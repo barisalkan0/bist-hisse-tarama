@@ -252,9 +252,18 @@ Deno.serve(async (req: Request) => {
     if (!userId) {
       err("Muhtemel sebep: custom_data.user_id eksik ve bu yeni bir abonelik — manuel eşleme gerekebilir (ham payload webhook_events tablosunda duruyor).");
     }
-    // Lemon Squeezy'nin sonsuz retry döngüsüne girmemesi için yine de 200
-    // dönülür; hata zaten loglandı ve ham payload webhook_events'te kalıcı.
-    return new Response("ok (subscription update failed, see logs)", { status: 200 });
+    // G5 güvenlik düzeltmesi: idempotency kaydını geri al ve 500 dön. Aksi
+    // halde bu satır webhook_events'te dururken Lemon Squeezy retry'ı
+    // event_hash unique constraint'ine takılıp "duplicate" sanılıp atlanır ve
+    // başarısız abonelik güncellemesi sessizce kaybolurdu.
+    const { error: deleteErr } = await supabase
+      .from("webhook_events")
+      .delete()
+      .eq("event_hash", eventHash);
+    if (deleteErr) {
+      err("webhook_events geri alma hatası (idempotency kaydı kalmış olabilir):", deleteErr.message);
+    }
+    return new Response("subscription update failed, retry", { status: 500 });
   }
 
   log(`subscriptions güncellendi: subscription=${providerSubscriptionId} plan=${plan} status=${status} user=${userId ?? "(değişmedi)"}`);

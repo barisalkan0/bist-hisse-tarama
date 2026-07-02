@@ -355,22 +355,17 @@ def evaluate_outcomes(data, as_of_date=None, db=None) -> int:
     return cur.rowcount
 
 
-def load_outcomes(limit: int | None = None, db=None) -> pd.DataFrame:
-    db = init_db(db)
-    sql = """
-        SELECT signal_date, symbol, radar_status, ml_score, score_5, score_10,
-               relative_score, confidence, signal_horizon, simple_reason, main_risk,
-               horizon_days, start_price, end_date, end_price, abs_return,
-               max_return, min_return, success, evaluated_at
-        FROM ml_radar_outcome
-        WHERE COALESCE(model_kind, '')=?
-        ORDER BY signal_date DESC, horizon_days ASC, abs_return DESC
-    """
-    params = [MODEL_KIND]
-    if limit is not None:
-        sql += " LIMIT ?"
-        params.append(int(limit))
-    rows = db.execute(sql, params).fetchall()
+_OUTCOME_COLS = [
+    "signal_date", "symbol", "radar_status", "ml_score", "score_5", "score_10",
+    "relative_score", "confidence", "signal_horizon", "simple_reason", "main_risk",
+    "horizon_days", "start_price", "end_date", "end_price", "abs_return",
+    "max_return", "min_return", "success", "evaluated_at",
+]
+
+
+def _display_outcomes(rows) -> pd.DataFrame:
+    """Sonuç satırlarını (yerel SQLite veya Supabase REST'ten, _OUTCOME_COLS
+    sırasında tuple listesi) Türkçe gösterim tablosuna çevirir."""
     if not rows:
         return pd.DataFrame(columns=[
             "Sinyal Tarihi", "Hisse", "Radar Durumu", "Yükseliş Puanı", "Göreli Güç",
@@ -378,13 +373,7 @@ def load_outcomes(limit: int | None = None, db=None) -> pd.DataFrame:
             "Sonuç Fiyatı", "Getiri %", "En Yüksek %", "En Düşük %",
             "Tuttu mu?", "Basit Neden", "Ana Risk", "evaluated_at",
         ])
-    cols = [
-        "signal_date", "symbol", "radar_status", "ml_score", "score_5", "score_10",
-        "relative_score", "confidence", "signal_horizon", "simple_reason", "main_risk",
-        "horizon_days", "start_price", "end_date", "end_price", "abs_return",
-        "max_return", "min_return", "success", "evaluated_at",
-    ]
-    df = pd.DataFrame([dict(zip(cols, r)) for r in rows])
+    df = pd.DataFrame([dict(zip(_OUTCOME_COLS, r)) for r in rows])
     return pd.DataFrame({
         "Sinyal Tarihi": df["signal_date"],
         "Hisse": df["symbol"],
@@ -407,6 +396,25 @@ def load_outcomes(limit: int | None = None, db=None) -> pd.DataFrame:
         "Ana Risk": df["main_risk"],
         "evaluated_at": df["evaluated_at"],
     })
+
+
+def load_outcomes(limit: int | None = None, db=None) -> pd.DataFrame:
+    db = init_db(db)
+    sql = """
+        SELECT signal_date, symbol, radar_status, ml_score, score_5, score_10,
+               relative_score, confidence, signal_horizon, simple_reason, main_risk,
+               horizon_days, start_price, end_date, end_price, abs_return,
+               max_return, min_return, success, evaluated_at
+        FROM ml_radar_outcome
+        WHERE COALESCE(model_kind, '')=?
+        ORDER BY signal_date DESC, horizon_days ASC, abs_return DESC
+    """
+    params = [MODEL_KIND]
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(int(limit))
+    rows = db.execute(sql, params).fetchall()
+    return _display_outcomes(rows)
 
 
 def outcome_summary(outcomes: pd.DataFrame) -> dict:

@@ -244,6 +244,99 @@ def is_pro(user_id: str, access_token: str, *_) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Akıllı Radar — REST API (G1 güvenlik düzeltmesi, 2026-07-02)
+#
+# Radar/sonuç verisi artık VPS cron'unda Postgres'e (radar_snapshots/
+# radar_outcomes) yazılır; buradaki okuma KULLANICININ KENDİ access_token'ıyla
+# yapılır, böylece ücretli-tier RLS kontrolü sunucuda (Postgres'te) zorlanır —
+# free kullanıcı/anonim istek boş liste alır. Public Storage gzip'inde bu iki
+# tablo artık YOK (bkz. scripts/refresh_data.py adım 6).
+# ---------------------------------------------------------------------------
+
+_RADAR_SNAPSHOT_COLS = [
+    "data_date", "symbol", "radar_status", "ml_score", "score_5", "score_10",
+    "relative_score", "confidence", "data_confidence", "liquidity_label",
+    "trend_label", "volume_label", "horizon", "simple_reason", "main_risk",
+    "son", "fark", "created_at",
+]
+_RADAR_STATUS_PRIORITY = {"Güçlü Aday": 0, "Takip Edilecek": 1, "Riskli Ama Hareketli": 2}
+
+_RADAR_OUTCOME_COLS = [
+    "signal_date", "symbol", "radar_status", "ml_score", "score_5", "score_10",
+    "relative_score", "confidence", "signal_horizon", "simple_reason", "main_risk",
+    "horizon_days", "start_price", "end_date", "end_price", "abs_return",
+    "max_return", "min_return", "success", "evaluated_at",
+]
+
+
+def radar_snapshot(access_token: str):
+    """En son günün radar satırlarını REST'ten çeker (RLS: yalnızca ücretli tier
+    görür; free/oturumsuz istek boş liste alır).
+
+    Döndürür: (satır_tuple_listesi, data_date | None) — ml_signals.daily._display
+    ile aynı kolon sırasını kullanır.
+    """
+    if not access_token:
+        return [], None
+    try:
+        r = requests.get(
+            _rest_url("radar_snapshots"),
+            headers=_rest_headers(access_token),
+            params={"select": "data_date", "order": "data_date.desc", "limit": 1},
+            timeout=10,
+        )
+        r.raise_for_status()
+        latest = r.json()
+        if not latest:
+            return [], None
+        data_date = latest[0]["data_date"]
+        r2 = requests.get(
+            _rest_url("radar_snapshots"),
+            headers=_rest_headers(access_token),
+            params={
+                "data_date": f"eq.{data_date}",
+                "select": ",".join(_RADAR_SNAPSHOT_COLS),
+            },
+            timeout=15,
+        )
+        r2.raise_for_status()
+        rows = r2.json()
+        rows.sort(key=lambda row: (
+            _RADAR_STATUS_PRIORITY.get(row.get("radar_status"), 3),
+            -(row.get("ml_score") or 0),
+            -(row.get("score_10") or 0),
+        ))
+        return [tuple(row.get(c) for c in _RADAR_SNAPSHOT_COLS) for row in rows], data_date
+    except Exception:
+        return [], None
+
+
+def radar_outcomes(access_token: str, limit: int = 500) -> list:
+    """Sonuçlanmış radar sinyallerini REST'ten çeker (RLS: yalnızca ücretli tier).
+
+    Döndürür: satır_tuple_listesi — ml_signals.daily._display_outcomes ile aynı
+    kolon sırasını kullanır.
+    """
+    if not access_token:
+        return []
+    try:
+        r = requests.get(
+            _rest_url("radar_outcomes"),
+            headers=_rest_headers(access_token),
+            params={
+                "select": ",".join(_RADAR_OUTCOME_COLS),
+                "order": "signal_date.desc,horizon_days.asc",
+                "limit": limit,
+            },
+            timeout=15,
+        )
+        r.raise_for_status()
+        return [tuple(row.get(c) for c in _RADAR_OUTCOME_COLS) for row in r.json()]
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
 # Per-user Favoriler — REST API
 # ---------------------------------------------------------------------------
 

@@ -50,6 +50,79 @@ def _upload_service(gz_bytes, url, service_key):
         return str(e)
 
 
+# ---------------------------------------------------------------------------
+# Akilli Radar -> Supabase Postgres senkronu (G1 guvenlik duzeltmesi, 2026-07-02)
+# Ucretli radar/sonuc verisi artik tier-RLS'li Postgres tablolarinda; public
+# gzip'e (adim 6) ARTIK GIRMIYOR. Streamlit radar sekmesi bu tablolari kendi
+# REST cagrisiyla okur (data/supabase_store.py: radar_snapshot/radar_outcomes).
+# ---------------------------------------------------------------------------
+_RADAR_SNAPSHOT_COLS = [
+    "data_date", "symbol", "model_kind", "radar_status", "ml_score", "score_5",
+    "score_10", "relative_score", "confidence", "data_confidence",
+    "liquidity_label", "trend_label", "volume_label", "horizon",
+    "simple_reason", "main_risk", "son", "fark", "created_at",
+]
+_RADAR_OUTCOME_COLS = [
+    "signal_date", "symbol", "model_kind", "radar_status", "ml_score", "score_5",
+    "score_10", "relative_score", "confidence", "signal_horizon", "simple_reason",
+    "main_risk", "horizon_days", "start_price", "end_date", "end_price",
+    "abs_return", "max_return", "min_return", "success", "evaluated_at",
+]
+_RADAR_TEXT_COLS = {
+    "radar_status", "confidence", "data_confidence", "liquidity_label",
+    "trend_label", "volume_label", "horizon", "simple_reason", "main_risk",
+    "signal_horizon",
+}
+
+
+def _normalize_text(v):
+    """Eski satirlarda gorulebilen mojibake'i (UTF-8 metnin yanlislikla Latin-1
+    olarak okunmasi, ornek: 'GÃ¼Ã§lÃ¼') duzeltir. Zaten duzgunse dokunmaz."""
+    if not isinstance(v, str) or "Ã" not in v:
+        return v
+    try:
+        return v.encode("latin1").decode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return v
+
+
+def _rows_as_dicts(db, table, cols):
+    rows = db.execute(f"SELECT {','.join(cols)} FROM {table}").fetchall()
+    out = []
+    for r in rows:
+        d = dict(zip(cols, r))
+        for k in _RADAR_TEXT_COLS & d.keys():
+            d[k] = _normalize_text(d[k])
+        out.append(d)
+    return out
+
+
+def _upsert_chunked(url, service_key, table, on_conflict, rows, chunk=500):
+    headers = {
+        "apikey": service_key,
+        "Authorization": f"Bearer {service_key}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates",
+    }
+    for i in range(0, len(rows), chunk):
+        batch = rows[i:i + chunk]
+        r = requests.post(
+            f"{url}/rest/v1/{table}?on_conflict={on_conflict}",
+            headers=headers, json=batch, timeout=60,
+        )
+        if not r.ok:
+            raise RuntimeError(f"{table} upsert HTTP {r.status_code}: {r.text[:300]}")
+
+
+def _sync_radar_to_postgres(db, url, service_key):
+    snap_rows = _rows_as_dicts(db, "ml_radar_snapshot", _RADAR_SNAPSHOT_COLS)
+    out_rows = _rows_as_dicts(db, "ml_radar_outcome", _RADAR_OUTCOME_COLS)
+    _upsert_chunked(url, service_key, "radar_snapshots", "data_date,symbol,model_kind", snap_rows)
+    _upsert_chunked(url, service_key, "radar_outcomes",
+                     "signal_date,symbol,model_kind,horizon_days", out_rows)
+    log(f"radar->Postgres: snapshot={len(snap_rows)} satir, outcome={len(out_rows)} satir senkronize edildi")
+
+
 def main():
     url = os.environ.get("SUPABASE_URL")
     service_key = os.environ.get("SUPABASE_SERVICE_KEY")
@@ -111,10 +184,26 @@ def main():
                 log("radar uyari:", radar_err)
             else:
                 log(f"radar: data_date={radar_info.get('data_date')} created={radar_info.get('created')}")
+            # 5G/10G sonuc takibi de burada hesaplanir: Streamlit artik radar
+            # tablolarini yerel SQLite'tan degil Postgres'ten okuyacagi icin
+            # (bkz. asagida 5b ve adim 6) kendi tarafinda bu hesaplamayi
+            # tetikleyemez; cron tek kaynak haline gelir.
+            try:
+                n_eval = ml_daily.evaluate_outcomes(radar_data, as_of_date=radar_date)
+                log(f"radar sonuc takibi: {n_eval} kayit guncellendi")
+            except Exception as e:
+                log("radar sonuc takibi HATA:", e)
         else:
             log("radar atlandi: veri veya tarih yok")
     except Exception as e:
         log("radar HATA (upload yine de devam ediyor):", e)
+
+    # 5b) Radar/Sonuc verisini Supabase Postgres'e senkronize et (G1 duzeltmesi).
+    # Hatasi loglanir ama fiyat upload'ini ENGELLEMEZ (radar ikincil).
+    try:
+        _sync_radar_to_postgres(cache.connect(), url, service_key)
+    except Exception as e:
+        log("radar->Postgres senkron HATA (upload yine de devam ediyor):", e)
 
     # 6) VACUUM + gzip + Storage upload (service_role)
     src = cache._work_path()
@@ -122,6 +211,12 @@ def main():
     try:
         shutil.copy2(src, tmp)
         c = sqlite3.connect(tmp)
+        # G1 duzeltmesi: ucretli radar/sonuc verisi artik Postgres'te tier-RLS
+        # ile korunuyor (adim 5b onceden senkronize etti); public gzip'e
+        # girmemesi icin bu iki tablo yalnizca YUKLENEN KOPYADAN silinir
+        # (canli calisan DB dokunulmaz, script zaten kopya uzerinde calisiyor).
+        c.execute("DROP TABLE IF EXISTS ml_radar_snapshot")
+        c.execute("DROP TABLE IF EXISTS ml_radar_outcome")
         c.execute("VACUUM")
         c.close()
         with open(tmp, "rb") as f:
